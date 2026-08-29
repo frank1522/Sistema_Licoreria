@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Configuración</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .navbar-custom { background-color: #006D5B !important; }
+        .text-gold { color: #D4AF37 !important; }
+        .text-teal { color: #006D5B; }
+        .btn-teal { background-color: #006D5B; color: white; transition: 0.3s; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+        .nav-tabs .nav-link { color: #495057; font-weight: 500; border: none; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+        .nav-tabs .nav-link.active { color: #006D5B; border-bottom: 3px solid #006D5B; font-weight: 600; }
+        .card-custom { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+        .oculto { display: none !important; }
+        .modal-custom { background: #fff; width: 450px; border-radius: 8px; overflow: hidden; }
+        .modal-header-custom { background: #006D5B; color: #fff; padding: 15px; display: flex; justify-content: space-between; }
+    </style>
+</head>
+<body>
+    
+    <div id="menu-container"></div>
+
+    <div class="container mt-4">
+        <div class="mb-4">
+            <h3 class="fw-bold m-0 text-teal">⚙️ Panel de Configuración</h3>
+            <p class="text-muted m-0">Administra catálogos, clientes y accesos al sistema.</p>
+        </div>
+
+        <div class="card card-custom p-4">
+            <ul class="nav nav-tabs mb-4" id="configTabs" role="tablist">
+                <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#categorias">📂 Categorías</button></li>
+                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#proveedores">🏢 Proveedores</button></li>
+                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#clientes">👥 Clientes</button></li>
+                <li class="nav-item"><button class="nav-link text-danger" data-bs-toggle="tab" data-bs-target="#usuarios">🔐 Usuarios</button></li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- CATEGORIAS (Mantenido) -->
+                <div class="tab-pane fade show active" id="categorias">
+                    <div class="d-flex justify-content-between mb-3">
+                        <h5 class="fw-bold text-teal">Categorías de Inventario</h5>
+                        <button class="btn btn-teal btn-sm fw-bold" onclick="abrirModalCategoria()">✨ NUEVA CATEGORÍA</button>
+                    </div>
+                    <table class="table table-hover align-middle"><thead class="table-light"><tr><th>ID</th><th>Nombre</th><th class="text-center">Acción</th></tr></thead><tbody id="tablaCategorias"></tbody></table>
+                </div>
+
+                <!-- PROVEEDORES (Mantenido) -->
+                <div class="tab-pane fade" id="proveedores">
+                    <div class="d-flex justify-content-between mb-3">
+                        <h5 class="fw-bold text-teal">Directorio de Proveedores</h5>
+                        <button class="btn btn-teal btn-sm fw-bold" onclick="abrirModalProveedor()">✨ NUEVO PROVEEDOR</button>
+                    </div>
+                    <table class="table table-hover align-middle"><thead class="table-light"><tr><th>RUC/DNI</th><th>Razón Social</th><th>Teléfono</th><th class="text-center">Acción</th></tr></thead><tbody id="tablaProveedores"></tbody></table>
+                </div>
+                
+                <!-- CLIENTES (NUEVO) -->
+                <div class="tab-pane fade" id="clientes">
+                    <div class="d-flex justify-content-between mb-3">
+                        <h5 class="fw-bold text-teal">Base de Datos de Clientes</h5>
+                        <button class="btn btn-teal btn-sm fw-bold" onclick="abrirModalCliente()">✨ NUEVO CLIENTE</button>
+                    </div>
+                    <table class="table table-hover align-middle"><thead class="table-light"><tr><th>Doc.</th><th>Nombre / Razón Social</th><th>Teléfono</th><th class="text-center">Acción</th></tr></thead><tbody id="tablaClientes"></tbody></table>
+                </div>
+
+                <!-- USUARIOS (NUEVO) -->
+                <div class="tab-pane fade" id="usuarios">
+                    <div class="d-flex justify-content-between mb-3">
+                        <h5 class="fw-bold text-danger">Seguridad del Sistema</h5>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="abrirModalUsuario()">✨ NUEVO USUARIO</button>
+                    </div>
+                    <table class="table table-hover align-middle"><thead class="table-light"><tr><th>Nombre</th><th>Usuario (Login)</th><th>Rol</th><th class="text-center">Acción</th></tr></thead><tbody id="tablaUsuarios"></tbody></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODALES EXISTENTES (Categoría y Proveedor) -->
+    <div id="modalCategoria" class="modal-overlay oculto"><div class="modal-custom"><div class="modal-header-custom"><h5 class="m-0" id="tituloCat">Nueva Categoría</h5><button class="btn text-white p-0 fs-5" onclick="cerrarModal('modalCategoria')">&times;</button></div><div class="p-4"><input type="hidden" id="catId"><label class="fw-bold">Nombre:</label><input type="text" id="catNombre" class="form-control mb-3"><button class="btn btn-teal w-100 fw-bold" onclick="guardarCategoria()">GUARDAR</button></div></div></div>
+    <div id="modalProveedor" class="modal-overlay oculto"><div class="modal-custom"><div class="modal-header-custom"><h5 class="m-0" id="tituloProv">Nuevo Proveedor</h5><button class="btn text-white p-0 fs-5" onclick="cerrarModal('modalProveedor')">&times;</button></div><div class="p-4"><input type="hidden" id="provId"><label class="fw-bold">Razón Social:</label><input type="text" id="provNombre" class="form-control mb-2"><label class="fw-bold">RUC / DNI:</label><input type="text" id="provDoc" class="form-control mb-2"><label class="fw-bold">Teléfono:</label><input type="text" id="provTel" class="form-control mb-3"><button class="btn btn-teal w-100 fw-bold" onclick="guardarProveedor()">GUARDAR</button></div></div></div>
+
+    <!-- MODAL CLIENTE -->
+    <div id="modalCliente" class="modal-overlay oculto">
+        <div class="modal-custom">
+            <div class="modal-header-custom">
+                <h5 class="m-0" id="tituloCli">Nuevo Cliente</h5>
+                <button class="btn text-white p-0 fs-5" onclick="cerrarModal('modalCliente')">&times;</button>
+            </div>
+            <div class="p-4">
+                <input type="hidden" id="cliId">
+                <label class="fw-bold">Nombre o Razón Social:</label>
+                <input type="text" id="cliNombre" class="form-control mb-2">
+                <div class="row mb-3">
+                    <div class="col-6"><label class="fw-bold">Documento:</label><input type="text" id="cliDoc" class="form-control"></div>
+                    <div class="col-6"><label class="fw-bold">Teléfono:</label><input type="text" id="cliTel" class="form-control"></div>
+                </div>
+                <button class="btn btn-teal w-100 fw-bold" onclick="guardarCliente()">GUARDAR CLIENTE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL USUARIO -->
+    <div id="modalUsuario" class="modal-overlay oculto">
+        <div class="modal-custom">
+            <div class="modal-header-custom" style="background-color: #dc3545; border-bottom: 4px solid #6c757d;">
+                <h5 class="m-0" id="tituloUsu">Nuevo Usuario</h5>
+                <button class="btn text-white p-0 fs-5" onclick="cerrarModal('modalUsuario')">&times;</button>
+            </div>
+            <div class="p-4">
+                <input type="hidden" id="usuId">
+                <label class="fw-bold">Nombre Completo:</label>
+                <input type="text" id="usuNombre" class="form-control mb-2" placeholder="Ej. Frank Cajero">
+                
+                <div class="row mb-2">
+                    <div class="col-6"><label class="fw-bold">Usuario (Login):</label><input type="text" id="usuLogin" class="form-control"></div>
+                    <div class="col-6"><label class="fw-bold">Rol del Sistema:</label><select id="usuRol" class="form-select"></select></div>
+                </div>
+
+                <label class="fw-bold">Contraseña:</label>
+                <input type="password" id="usuPass" class="form-control mb-1">
+                <small class="text-muted mb-3 d-block" id="usuPassHint">Si editas y dejas esto en blanco, no cambiará la clave actual.</small>
+
+                <button class="btn btn-danger w-100 fw-bold" onclick="guardarUsuario()">GUARDAR ACCESO</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script src="menu.js"></script>
+    <script>
+       // --- SEGURIDAD: REDIRIGIR SI NO ES ADMIN ---
+        const rolUsuario = localStorage.getItem('rol'); 
+        if (rolUsuario !== 'Administrador') {
+            alert("⛔ Acceso denegado: Esta pantalla es solo para Administradores.");
+            window.location.href = 'venta.html'; 
+        }
+        const cerrarModal = (id) => document.getElementById(id).classList.add('oculto');
+        const fetchJSON = async (url, options) => { const r = await fetch(url, options); return r.json(); };
+
+        // --- Cargar Categorías y Proveedores (Resumido para espacio) ---
+        let categoriasGlobal = [], proveedoresGlobal = [], clientesGlobal = [], usuariosGlobal = [];
+
+        async function cargarVarios() {
+            // Categorias
+            const dCat = await fetchJSON('http://localhost:3000/api/categorias'); categoriasGlobal = dCat.categorias || [];
+            document.getElementById('tablaCategorias').innerHTML = categoriasGlobal.map(c => `<tr><td>${c.id_categoria}</td><td class="fw-bold">${c.nombre}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalCategoria(${c.id_categoria})">✏️</button></td></tr>`).join('');
+            
+            // Proveedores
+            const dProv = await fetchJSON('http://localhost:3000/api/proveedores'); proveedoresGlobal = dProv.proveedores || [];
+            document.getElementById('tablaProveedores').innerHTML = proveedoresGlobal.map(p => `<tr><td>${p.ruc_dni||'-'}</td><td class="fw-bold">${p.razon_social}</td><td>${p.telefono||'-'}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalProveedor(${p.id_proveedor})">✏️</button></td></tr>`).join('');
+        }
+        
+        // ... Funciones abrirModalCategoria/guardarCategoria/abrirModalProveedor/guardarProveedor iguales al paso anterior ...
+        window.abrirModalCategoria = (id = null) => { document.getElementById('catId').value = id||''; document.getElementById('catNombre').value = id ? categoriasGlobal.find(c=>c.id_categoria==id).nombre : ''; document.getElementById('modalCategoria').classList.remove('oculto'); }
+        window.guardarCategoria = async () => { const id = document.getElementById('catId').value, nombre = document.getElementById('catNombre').value; if(!nombre) return; await fetchJSON(id ? `http://localhost:3000/api/categorias/editar/${id}` : `http://localhost:3000/api/categorias/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({nombre}) }); cerrarModal('modalCategoria'); cargarVarios(); }
+        window.abrirModalProveedor = (id = null) => { const p = id ? proveedoresGlobal.find(x=>x.id_proveedor==id) : {}; document.getElementById('provId').value = id||''; document.getElementById('provNombre').value = p.razon_social||''; document.getElementById('provDoc').value = p.ruc_dni||''; document.getElementById('provTel').value = p.telefono||''; document.getElementById('modalProveedor').classList.remove('oculto'); }
+        window.guardarProveedor = async () => { const id = document.getElementById('provId').value, d = { razon_social: document.getElementById('provNombre').value, ruc_dni: document.getElementById('provDoc').value, telefono: document.getElementById('provTel').value }; if(!d.razon_social) return; await fetchJSON(id ? `http://localhost:3000/api/proveedores/editar/${id}` : `http://localhost:3000/api/proveedores/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) }); cerrarModal('modalProveedor'); cargarVarios(); }
+
+        // --- CRUD CLIENTES ---
+        async function cargarClientes() {
+            const data = await fetchJSON('http://localhost:3000/api/clientes'); clientesGlobal = data.clientes || [];
+            document.getElementById('tablaClientes').innerHTML = clientesGlobal.map(c => `<tr><td class="text-muted">${c.documento||'-'}</td><td class="fw-bold">${c.nombre}</td><td>${c.telefono||'-'}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalCliente(${c.id_cliente})">✏️</button> <button class="btn btn-sm btn-outline-danger" onclick="eliminarCliente(${c.id_cliente})">🗑️</button></td></tr>`).join('');
+        }
+
+        window.abrirModalCliente = (id = null) => {
+            const c = id ? clientesGlobal.find(x=>x.id_cliente==id) : {};
+            document.getElementById('cliId').value = id||''; document.getElementById('cliNombre').value = c.nombre||'';
+            document.getElementById('cliDoc').value = c.documento||''; document.getElementById('cliTel').value = c.telefono||'';
+            document.getElementById('tituloCli').innerText = id ? 'Editar Cliente' : 'Nuevo Cliente';
+            document.getElementById('modalCliente').classList.remove('oculto');
+        }
+
+        window.guardarCliente = async () => {
+            const id = document.getElementById('cliId').value;
+            const d = { nombre: document.getElementById('cliNombre').value, documento: document.getElementById('cliDoc').value, telefono: document.getElementById('cliTel').value };
+            if(!d.nombre) return alert("Nombre obligatorio.");
+            const res = await fetchJSON(id ? `http://localhost:3000/api/clientes/editar/${id}` : `http://localhost:3000/api/clientes/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
+            alert(res.message); cerrarModal('modalCliente'); cargarClientes();
+        }
+
+        window.eliminarCliente = async (id) => {
+            if(!confirm("¿Seguro que deseas eliminar este cliente?")) return;
+            const res = await fetchJSON(`http://localhost:3000/api/clientes/eliminar/${id}`, { method: 'DELETE' });
+            alert(res.message); if(res.success) cargarClientes();
+        }
+
+        // --- CRUD USUARIOS ---
+        async function cargarUsuariosYRoles() {
+            const dRoles = await fetchJSON('http://localhost:3000/api/roles');
+            const select = document.getElementById('usuRol'); select.innerHTML = '';
+            dRoles.roles.forEach(r => select.innerHTML += `<option value="${r.id_rol}">${r.descripcion}</option>`);
+
+            const dUsu = await fetchJSON('http://localhost:3000/api/usuarios'); usuariosGlobal = dUsu.usuarios || [];
+            document.getElementById('tablaUsuarios').innerHTML = usuariosGlobal.map(u => `<tr><td class="fw-bold">${u.nombre}</td><td><span class="badge bg-secondary">${u.usuario}</span></td><td>${u.rol}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalUsuario(${u.id_usuario})">✏️</button> <button class="btn btn-sm btn-outline-danger" onclick="eliminarUsuario(${u.id_usuario})">🗑️</button></td></tr>`).join('');
+        }
+
+        window.abrirModalUsuario = (id = null) => {
+            const u = id ? usuariosGlobal.find(x=>x.id_usuario==id) : {};
+            document.getElementById('usuId').value = id||''; document.getElementById('usuNombre').value = u.nombre||'';
+            document.getElementById('usuLogin').value = u.usuario||''; document.getElementById('usuPass').value = '';
+            if(id) document.getElementById('usuRol').value = u.id_rol;
+            document.getElementById('tituloUsu').innerText = id ? 'Editar Accesos' : 'Nuevo Usuario';
+            document.getElementById('usuPassHint').style.display = id ? 'block' : 'none';
+            document.getElementById('modalUsuario').classList.remove('oculto');
+        }
+
+        window.guardarUsuario = async () => {
+            const id = document.getElementById('usuId').value;
+            const d = { nombre: document.getElementById('usuNombre').value, usuario: document.getElementById('usuLogin').value, id_rol: document.getElementById('usuRol').value, password: document.getElementById('usuPass').value };
+            if(!d.nombre || !d.usuario || (!d.password && !id)) return alert("Faltan datos clave.");
+            
+            const res = await fetchJSON(id ? `http://localhost:3000/api/usuarios/editar/${id}` : `http://localhost:3000/api/usuarios/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
+            alert(res.message); cerrarModal('modalUsuario'); cargarUsuariosYRoles();
+        }
+
+        window.eliminarUsuario = async (id) => {
+            if(!confirm("¿Seguro que deseas eliminar este usuario?")) return;
+            const res = await fetchJSON(`http://localhost:3000/api/usuarios/eliminar/${id}`, { method: 'DELETE' });
+            alert(res.message); if(res.success) cargarUsuariosYRoles();
+        }
+
+        // Arrancar Todo
+        cargarVarios(); cargarClientes(); cargarUsuariosYRoles();
+    </script>
+</body>
+</html>

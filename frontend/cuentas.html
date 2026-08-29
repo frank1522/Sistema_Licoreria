@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Cuentas Abiertas</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  
+    <style>
+        .navbar-custom { background-color: #006D5B !important; border-bottom: 3px solid #D4AF37; }
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .text-gold { color: #D4AF37 !important; }
+        .text-teal { color: #006D5B; }
+        .bg-teal { background-color: #006D5B; color: white; }
+        .btn-teal { background-color: #006D5B; color: white; transition: 0.3s; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+        
+        /* Estilos de las Tarjetas (Mesas/Cuentas) */
+        .card-cuenta { border: none; border-radius: 12px; transition: transform 0.2s; box-shadow: 0 4px 8px rgba(0,0,0,0.08); background: white; height: 100%;}
+        .card-cuenta:hover { transform: translateY(-5px); }
+        .cuenta-header { border-top-left-radius: 12px; border-top-right-radius: 12px; padding: 10px 15px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* Semáforo de colores para las tarjetas */
+        .header-mesa { background-color: #006D5B; color: white; } /* Verde para Mesas */
+        .header-cliente { background-color: #1a4f66; color: white; } /* Azul para Fiados/Clientes */
+        
+        .cuenta-body { padding: 15px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+        .monto-total { font-size: 1.5rem; font-weight: 700; color: #006D5B; }
+    </style>
+</head>
+<body>
+
+    <!-- Contenedor donde tu menu.js inyectará el menú lateral -->
+    <div id="menu-container"></div>
+
+    <div class="container mt-4">
+        <!-- Cabecera -->
+        <div class="d-flex justify-content-between align-items-end mb-4">
+            <div>
+                <h3 class="fw-bold m-0 text-teal">🍻 Gestión de Cuentas y Mesas</h3>
+                <p class="text-muted m-0">Controla el consumo en el local y los fiados pendientes.</p>
+            </div>
+            <div>
+                <button class="btn btn-teal fw-bold px-4 py-2 text-gold shadow" data-bs-toggle="modal" data-bs-target="#modalNuevaCuenta">
+                    ✨ NUEVA CUENTA
+                </button>
+            </div>
+        </div>
+
+        <!-- GRILLA DE TARJETAS (AQUÍ SE INYECTAN LAS MESAS REALES DESDE MYSQL) -->
+        <div class="row g-4" id="contenedorCuentas">
+            <!-- El JavaScript llenará esto -->
+        </div>
+    </div>
+
+    <!-- MODAL: CREAR NUEVA CUENTA -->
+    <div class="modal fade" id="modalNuevaCuenta" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-teal text-white">
+                    <h5 class="modal-title fw-bold">✨ Aperturar Nueva Cuenta</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="fw-bold mb-2">Tipo de Cuenta:</label>
+                        <select class="form-select border-2" id="tipoCuenta">
+                            <option value="mesa">🪑 Consumo en Mesa / Local</option>
+                            <option value="cliente">👤 Cuenta a nombre de un Cliente</option>
+                        </select>
+                    </div>
+                    <div class="mb-4">
+                        <label class="fw-bold mb-2">Identificador (Nombre o N° de Mesa):</label>
+                        <input type="text" class="form-control border-2" id="identificadorCuenta" placeholder="Ej. Mesa 5 / Carlos Gómez">
+                    </div>
+                    <button class="btn btn-teal w-100 fw-bold py-2 text-gold" id="btnGuardarCuenta">ABRIR CUENTA ➡️</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts de Bootstrap y tu Menú -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script> 
+
+    <!-- SCRIPT REAL DE CONEXIÓN AL BACKEND -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            cargarCuentasAbiertas();
+            
+            const btnAbrir = document.getElementById('btnGuardarCuenta');
+            if(btnAbrir) {
+                btnAbrir.addEventListener('click', guardarNuevaCuenta);
+            }
+        });
+
+       // 1. LEER MESAS DESDE MYSQL (VERSIÓN CON DETECTOR DE ERRORES)
+        async function cargarCuentasAbiertas() {
+            const contenedor = document.getElementById('contenedorCuentas');
+            try {
+                const res = await fetch('/api/cuentas');
+                
+                // Si el servidor (Node.js) se apagó o falló
+                if (!res.ok) throw new Error('El backend no responde. ¿Está prendido tu servidor Node.js?');
+                
+                const data = await res.json();
+                contenedor.innerHTML = ''; 
+                
+                if (data.success && data.cuentas.length > 0) {
+                    data.cuentas.forEach(cuenta => {
+                        const esMesa = cuenta.tipo === 'mesa';
+                        const claseHeader = esMesa ? 'header-mesa' : 'header-cliente';
+                        const icono = esMesa ? '🪑' : '👤';
+                        
+                        contenedor.innerHTML += `
+                            <div class="col-12 col-md-6 col-lg-3">
+                                <div class="card-cuenta border border-light">
+                                    <div class="cuenta-header ${claseHeader}">
+                                        <span>${icono} ${cuenta.identificador}</span>
+                                    </div>
+                                    <div class="cuenta-body text-center d-flex flex-column justify-content-between">
+                                        <div>
+                                            <div class="text-muted small mb-1">Total acumulado</div>
+                                            <h3 class="monto-total mb-3">S/ ${parseFloat(cuenta.total).toFixed(2)}</h3>
+                                        </div>
+                                        <button class="btn btn-outline-primary w-100 fw-bold" onclick="abrirDetalle(${cuenta.id_cuenta})">
+                                            ✏️ Ver / Editar Tragos
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else if (data.success) {
+                    contenedor.innerHTML = `
+                        <div class="col-12 text-center py-5">
+                            <h4 class="text-muted">No hay cuentas abiertas ahorita.</h4>
+                            <p class="text-muted">¡Abre una nueva para empezar a vender! 🍻</p>
+                        </div>
+                    `;
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch(error) {
+                console.error("Error completo:", error);
+                // Aquí pintamos el error en la pantalla para que lo veas sin F12
+                contenedor.innerHTML = `
+                    <div class="col-12">
+                        <div class="alert alert-danger fw-bold text-center p-4 shadow-sm">
+                            ⚠️ Error: ${error.message}<br>
+                            <span class="text-muted fw-normal" style="font-size: 0.9rem;">(Revisa la pantallita negra de tu servidor para ver si MySQL está corriendo)</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 2. CREAR UNA CUENTA NUEVA EN LA BD
+        async function guardarNuevaCuenta() {
+            const tipo = document.getElementById('tipoCuenta').value;
+            const identificador = document.getElementById('identificadorCuenta').value;
+            
+            if (!identificador.trim()) {
+                alert('⚠️ Mano, escribe el nombre de la mesa o del cliente primero.');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/cuentas/nueva', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tipo: tipo, identificador: identificador })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    // Cerrar el modal correctamente
+                    const modalEl = document.getElementById('modalNuevaCuenta');
+                    const modalInst = bootstrap.Modal.getInstance(modalEl);
+                    modalInst.hide();
+                    
+                    // Limpiar el campo y recargar las tarjetas
+                    document.getElementById('identificadorCuenta').value = '';
+                    cargarCuentasAbiertas();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch(error) {
+                console.error("Error al guardar:", error);
+            }
+        }
+
+        // 3. ENTRAR A LA MESA (REDIRECCIÓN)
+        function abrirDetalle(id_cuenta) {
+            // Te manda a la pantalla de consumo amarrando el ID de esta mesa específica
+            window.location.href = `detalle_cuenta.html?id=${id_cuenta}`;
+        }
+    </script>
+</body>
+</html>

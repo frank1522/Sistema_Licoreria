@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Punto de Venta</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <style>
+        .cursor-pointer { cursor: pointer; }
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .navbar-custom { background-color: #006D5B; }
+        .text-gold { color: #D4AF37; }
+        .card-custom { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .btn-teal { background-color: #006D5B; color: white; transition: 0.3s; font-weight: bold; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+        .btn-gold { background-color: #D4AF37; color: white; font-weight: bold; }
+        .btn-gold:hover { background-color: #b5952f; color: white; }
+        
+        /* Estilos del buscador y carrito */
+        .buscador-input { font-size: 1.2rem; padding: 15px; border: 2px solid #006D5B; border-radius: 8px; }
+        .table-carrito th { background-color: #006D5B; color: white; }
+        .total-panel { background-color: #111; color: #00FF00; font-size: 3rem; text-align: right; padding: 10px 20px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="menu-container"></div>
+
+    <div class="container-fluid mt-4 px-4">
+        <div class="row g-3">
+            
+            <div class="col-md-8">
+                <div class="card card-custom p-3 mb-3">
+                    <div class="input-group">
+                        <span class="input-group-text bg-light fs-4">🔍</span>
+                        <input type="text" id="inputBuscador" class="form-control buscador-input" placeholder="Escanea el código de barras o escribe el nombre del producto..." autofocus>
+                    </div>
+                    <ul id="listaResultados" class="list-group position-absolute w-100" style="z-index: 1000; top: 100%; display: none;"></ul>
+                </div>
+
+                <div class="card card-custom p-3" style="min-height: 400px;">
+                    <h5 class="fw-bold text-secondary mb-3">🛒 Detalle de la Venta</h5>
+                    <table class="table table-hover table-carrito align-middle">
+                        <thead>
+                            <tr>
+                                <th width="10%">Cód.</th>
+                                <th width="40%">Producto</th>
+                                <th width="15%" class="text-center">Precio</th>
+                                <th width="15%" class="text-center">Cant.</th>
+                                <th width="15%" class="text-end">Subtotal</th>
+                                <th width="5%"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="cuerpoCarrito">
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">El carrito está vacío. Empieza a escanear.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+           <!-- PANEL DERECHO: COBRO Y MÉTODOS DE PAGO -->
+            <div class="col-md-4">
+                <div class="card card-custom p-4 h-100">
+                    <h5 class="fw-bold text-center mb-3">TOTAL A PAGAR</h5>
+                    
+                    <div class="total-panel mb-4">
+                        S/ <span id="txtTotalPagar">0.00</span>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="fw-bold mb-2">💵 Método de Pago:</label>
+                        <select id="selectMetodoPago" class="form-select form-select-lg mb-3 border-2">
+                            <option value="Efectivo">Efectivo</option>
+                            <option value="Yape">Yape / Plin</option>
+                            <option value="Tarjeta">Tarjeta (POS)</option>
+                            <option value="Mixto">🔀 Pago Mixto (Varias formas)</option>
+                        </select>
+                    </div>
+
+                    <!-- PANEL: SOLO EFECTIVO (Visible por defecto) -->
+                    <div id="panelEfectivo" class="mb-3 bg-light p-3 border rounded">
+                        <label class="fw-bold text-secondary fs-6">Efectivo Recibido:</label>
+                        <div class="input-group">
+                            <span class="input-group-text">S/</span>
+                            <input type="number" id="inputSoloEfectivo" class="form-control fs-4 fw-bold" placeholder="0.00">
+                        </div>
+                    </div>
+
+                    <!-- PANEL: MULTIPAGO / MIXTO (Oculto por defecto) -->
+                    <div id="panelMixto" class="mb-3 bg-light p-3 border rounded" style="display: none;">
+                        <label class="fw-bold text-secondary fs-6 mb-2">Desglose de Pago:</label>
+                        
+                        <div class="input-group mb-2">
+                            <span class="input-group-text bg-success text-white" style="width: 90px;">Efectivo</span>
+                            <input type="number" id="inputMixEfectivo" class="form-control text-end fw-bold mix-input" placeholder="0.00">
+                        </div>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white" style="background-color: #7400b8; width: 90px;">Yape</span>
+                            <input type="number" id="inputMixYape" class="form-control text-end fw-bold mix-input" placeholder="0.00">
+                        </div>
+                        <div class="input-group">
+                            <span class="input-group-text bg-secondary text-white" style="width: 90px;">Tarjeta</span>
+                            <input type="number" id="inputMixTarjeta" class="form-control text-end fw-bold mix-input" placeholder="0.00">
+                        </div>
+                    </div>
+
+                    <!-- VUELTO AUTOMÁTICO -->
+                    <div class="d-flex justify-content-between text-danger fw-bold fs-4 mb-3 px-2 border-top pt-3">
+                        <span>Vuelto:</span>
+                        <span>S/ <span id="txtVuelto">0.00</span></span>
+                    </div>
+
+                    <button class="btn btn-teal w-100 py-3 fs-5 mb-2" id="btnProcesarVenta">
+                        ✅ PROCESAR VENTA
+                    </button>
+                    
+                    <button class="btn btn-danger w-100 py-2 fw-bold mt-2" id="btnCancelarVenta">
+                        🗑️ CANCELAR VENTA
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+  // ==========================================
+        // 1. VARIABLES GLOBALES Y DOM
+        // ==========================================
+        const inputBuscador = document.getElementById('inputBuscador');
+        const listaResultados = document.getElementById('listaResultados');
+        const cuerpoCarrito = document.getElementById('cuerpoCarrito');
+        const txtTotalPagar = document.getElementById('txtTotalPagar');
+        
+        const selectMetodoPago = document.getElementById('selectMetodoPago');
+        const panelEfectivo = document.getElementById('panelEfectivo');
+        const panelMixto = document.getElementById('panelMixto');
+        const inputSoloEfectivo = document.getElementById('inputSoloEfectivo');
+        const txtVuelto = document.getElementById('txtVuelto');
+
+        let carrito = []; 
+
+        // ==========================================
+        // 2. BUSCADOR EN VIVO
+        // ==========================================
+        inputBuscador.addEventListener('input', async (e) => {
+            const q = e.target.value.trim();
+            if (q.length < 2) {
+                listaResultados.style.display = 'none';
+                return;
+            }
+            try {
+                const res = await fetch(`http://localhost:3000/api/productos/buscar?q=${q}`);
+                const data = await res.json();
+                if (data.success && data.productos.length > 0) {
+                    mostrarSugerencias(data.productos);
+                } else {
+                    listaResultados.style.display = 'none';
+                }
+            } catch (error) {
+                console.error("Error buscando:", error);
+            }
+        });
+
+        function mostrarSugerencias(productos) {
+            listaResultados.innerHTML = '';
+            productos.forEach(prod => {
+                const li = document.createElement('li');
+                li.className = 'list-group-item list-group-item-action cursor-pointer d-flex justify-content-between align-items-center';
+                li.innerHTML = `
+                    <span><strong>${prod.nombre}</strong> (S/ ${prod.precio_venta_unitario})</span>
+                    <span class="badge bg-secondary">Stock: ${prod.stock_unidades}</span>
+                `;
+                // Usamos onmousedown para evitar conflictos de clic
+                li.onmousedown = (e) => {
+                    e.preventDefault(); 
+                    if(prod.stock_unidades > 0) {
+                        agregarAlCarrito(prod);
+                        inputBuscador.value = ''; 
+                        listaResultados.style.display = 'none'; 
+                        inputBuscador.focus(); 
+                    } else {
+                        alert("¡Sin stock disponible para este producto!");
+                    }
+                };
+                listaResultados.appendChild(li);
+            });
+            listaResultados.style.display = 'block';
+        }
+
+        // ==========================================
+        // 3. LÓGICA DEL CARRITO
+        // ==========================================
+        function agregarAlCarrito(prod) {
+            const existe = carrito.find(p => p.id_producto === prod.id_producto);
+            if (existe) {
+                if (existe.cantidad < prod.stock_unidades) {
+                    existe.cantidad++;
+                } else {
+                    alert('Has alcanzado el stock máximo de este producto.');
+                }
+            } else {
+                carrito.push({
+                    id_producto: prod.id_producto,
+                    codigo_barras: prod.codigo_barras,
+                    nombre: prod.nombre,
+                    precio: parseFloat(prod.precio_venta_unitario),
+                    cantidad: 1,
+                    stock_max: prod.stock_unidades
+                });
+            }
+            renderizarCarrito();
+        }
+
+        function renderizarCarrito() {
+            cuerpoCarrito.innerHTML = '';
+            let total = 0;
+            if (carrito.length === 0) {
+                cuerpoCarrito.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">El carrito está vacío. Empieza a escanear.</td></tr>';
+                txtTotalPagar.textContent = '0.00';
+                txtVuelto.textContent = '0.00';
+                return;
+            }
+            carrito.forEach((item, index) => {
+                const subtotal = item.precio * item.cantidad;
+                total += subtotal;
+                cuerpoCarrito.innerHTML += `
+                    <tr>
+                        <td class="text-muted" style="font-size: 12px;">${item.codigo_barras || '-'}</td>
+                        <td class="fw-bold">${item.nombre}</td>
+                        <td class="text-center">S/ ${item.precio.toFixed(2)}</td>
+                        <td class="text-center">
+                            <input type="number" class="form-control form-control-sm mx-auto text-center fw-bold" 
+                                style="width: 70px;" value="${item.cantidad}" min="1" max="${item.stock_max}" 
+                                onchange="cambiarCantidad(${index}, this.value)">
+                        </td>
+                        <td class="text-end fw-bold text-success">S/ ${subtotal.toFixed(2)}</td>
+                        <td class="text-center">
+                            <button class="btn btn-sm btn-outline-danger" onclick="eliminarDelCarrito(${index})">🗑️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            txtTotalPagar.textContent = total.toFixed(2);
+            // Simular un evento de input para recalcular el vuelto si el total cambia
+            inputSoloEfectivo.dispatchEvent(new Event('input')); 
+        }
+
+        window.cambiarCantidad = (index, nuevaCant) => {
+            const cant = parseInt(nuevaCant);
+            if (cant > 0 && cant <= carrito[index].stock_max) {
+                carrito[index].cantidad = cant;
+            } else {
+                alert('Cantidad inválida o supera el stock.');
+            }
+            renderizarCarrito();
+        };
+
+        window.eliminarDelCarrito = (index) => {
+            carrito.splice(index, 1);
+            renderizarCarrito();
+        };
+
+        // ==========================================
+        // 4. PANELES DINÁMICOS Y VUELTO
+        // ==========================================
+        selectMetodoPago.addEventListener('change', (e) => {
+            const metodo = e.target.value;
+            inputSoloEfectivo.value = '';
+            document.querySelectorAll('.mix-input').forEach(i => i.value = '');
+            txtVuelto.textContent = '0.00';
+
+            if (metodo === 'Efectivo') {
+                panelEfectivo.style.display = 'block';
+                panelMixto.style.display = 'none';
+            } else if (metodo === 'Mixto') {
+                panelEfectivo.style.display = 'none';
+                panelMixto.style.display = 'block';
+            } else {
+                panelEfectivo.style.display = 'none';
+                panelMixto.style.display = 'none';
+            }
+        });
+
+        inputSoloEfectivo.addEventListener('input', () => {
+            const total = parseFloat(txtTotalPagar.textContent) || 0;
+            const pagado = parseFloat(inputSoloEfectivo.value) || 0;
+            txtVuelto.textContent = (pagado >= total && total > 0) ? (pagado - total).toFixed(2) : '0.00';
+        });
+
+        document.querySelectorAll('.mix-input').forEach(input => {
+            input.addEventListener('input', () => {
+                const total = parseFloat(txtTotalPagar.textContent) || 0;
+                const ef = parseFloat(document.getElementById('inputMixEfectivo').value) || 0;
+                const ya = parseFloat(document.getElementById('inputMixYape').value) || 0;
+                const ta = parseFloat(document.getElementById('inputMixTarjeta').value) || 0;
+                const pagado = ef + ya + ta;
+                txtVuelto.textContent = (pagado >= total && total > 0) ? (pagado - total).toFixed(2) : '0.00';
+            });
+        });
+
+        // ==========================================
+        // 5. PROCESAR VENTA (UN SOLO EVENTO)
+        // ==========================================
+        const btnProcesarVenta = document.getElementById('btnProcesarVenta');
+        
+        // Usamos una función tradicional para evitar múltiples asignaciones si hay recargas
+        btnProcesarVenta.onclick = async () => {
+            if (carrito.length === 0) return alert("El carrito está vacío. Escanea productos primero.");
+
+            const idCajaActiva = localStorage.getItem('id_caja_activa');
+            const idUsuario = localStorage.getItem('id_usuario');
+            if (!idCajaActiva) return alert("Error: La caja está cerrada.");
+
+            const totalPagar = parseFloat(txtTotalPagar.textContent);
+            const metodoSeleccionado = selectMetodoPago.value;
+            
+            let pagoEfectivo = 0, pagoYape = 0, pagoTarjeta = 0, montoRecibido = 0;
+
+            if (metodoSeleccionado === 'Efectivo') {
+                pagoEfectivo = totalPagar;
+                montoRecibido = parseFloat(inputSoloEfectivo.value) || totalPagar;
+            } else if (metodoSeleccionado === 'Yape') {
+                pagoYape = totalPagar;
+                montoRecibido = totalPagar;
+            } else if (metodoSeleccionado === 'Tarjeta') {
+                pagoTarjeta = totalPagar;
+                montoRecibido = totalPagar;
+            } else if (metodoSeleccionado === 'Mixto') {
+                pagoEfectivo = parseFloat(document.getElementById('inputMixEfectivo').value) || 0;
+                pagoYape = parseFloat(document.getElementById('inputMixYape').value) || 0;
+                pagoTarjeta = parseFloat(document.getElementById('inputMixTarjeta').value) || 0;
+                montoRecibido = pagoEfectivo + pagoYape + pagoTarjeta;
+            }
+
+            const vueltoGenerado = parseFloat(txtVuelto.textContent) || 0;
+
+            if (montoRecibido < totalPagar) {
+                return alert("Error: El monto recibido (S/ " + montoRecibido.toFixed(2) + ") es menor al total de la venta.");
+            }
+
+            btnProcesarVenta.disabled = true;
+            btnProcesarVenta.textContent = "⏳ Procesando...";
+
+            try {
+                const response = await fetch('http://localhost:3000/api/ventas/procesar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_caja: idCajaActiva, id_usuario: idUsuario,
+                        total: totalPagar,
+                        pago_efectivo: pagoEfectivo, pago_yape: pagoYape, pago_tarjeta: pagoTarjeta,
+                        monto_recibido: montoRecibido, vuelto: vueltoGenerado,
+                        carrito: carrito
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    carrito.length = 0; 
+                    inputBuscador.value = '';
+                    selectMetodoPago.value = 'Efectivo'; 
+                    selectMetodoPago.dispatchEvent(new Event('change')); 
+                    renderizarCarrito(); 
+                    inputBuscador.focus(); 
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al vender:", error);
+                alert("Error de conexión con el servidor.");
+            } finally {
+                btnProcesarVenta.disabled = false;
+                btnProcesarVenta.innerHTML = "✅ PROCESAR VENTA";
+            }
+        };
+
+        document.getElementById('btnCancelarVenta').onclick = () => {
+            if(confirm("¿Estás seguro de cancelar esta venta y vaciar el carrito?")) {
+                carrito.length = 0;
+                renderizarCarrito();
+                selectMetodoPago.value = 'Efectivo';
+                selectMetodoPago.dispatchEvent(new Event('change'));
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script>
+</body>
+</html>

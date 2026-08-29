@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detalle de la Mesa - ERP Licorería</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .btn-teal { background-color: #006D5B; color: white; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+      <button class="btn btn-outline-secondary mb-4 fw-bold" onclick="window.location.href='cuentas.html'">
+    ⬅️ Regresar a Mesas
+</button>
+        
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="fw-bold text-success m-0" id="tituloMesa">Cargando Mesa...</h3>
+            <span class="badge bg-primary fs-6">Estado: Abierta</span>
+        </div>
+
+        <div class="row g-4">
+            <!-- COLUMNA IZQUIERDA: BUSCADOR DE INVENTARIO -->
+            <div class="col-md-7">
+                <div class="card shadow-sm border-0 p-4 h-100">
+                    <h5 class="fw-bold text-teal mb-3">🔍 Agregar Productos</h5>
+                    <input type="text" class="form-control border-2 mb-3" id="buscadorProductos" placeholder="Busca cervezas, rones, cigarros...">
+                    
+                    <!-- Aquí saldrán los resultados del inventario -->
+                    <div id="resultadosBusqueda" class="list-group">
+                        <div class="text-muted text-center py-4">Usa el buscador para agregar tragos.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- COLUMNA DERECHA: LO QUE VA TOMANDO LA MESA -->
+            <div class="col-md-5">
+                <div class="card shadow-sm border-0 p-4 h-100">
+                    <h5 class="fw-bold text-teal mb-3">📋 Consumo Actual</h5>
+                    
+                    <!-- Lista de la cuenta (Aquí inyectaremos el carrito agrupado) -->
+                   <ul class="list-group mb-3" id="listaConsumo" style="max-height: 350px; overflow-y: auto; overflow-x: hidden;">
+                        <li class="list-group-item text-center text-muted py-3">La mesa está vacía.</li>
+                    </ul>
+                    
+                    <hr>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="fs-5 text-muted">Total a Pagar:</span>
+                        <span class="fs-3 fw-bold text-success" id="montoTotal">S/ 0.00</span>
+                    </div>
+                    
+                    <!-- LOS DOS NUEVOS BOTONES DE ACCIÓN -->
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-primary fw-bold py-2" onclick="guardarMesa()">
+                            💾 GUARDAR Y SEGUIR TOMANDO
+
+                        </button>
+                        <button class="btn btn-teal fw-bold py-3 fs-5" onclick="cobrarMesa()">
+                            💰 COBRAR Y CERRAR CUENTA
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+   <!-- MODAL DE COBRO DE MESA ACTUALIZADO -->
+    <div class="modal fade" id="modalCobro" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header" style="background-color: #006D5B; color: white;">
+                    <h5 class="modal-title fw-bold">💰 Procesar Pago de Mesa</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3 text-center">
+                        <label class="form-label text-muted fs-6">Monto Total a Cobrar</label>
+                        <h1 class="fw-bold text-success" id="modalMontoTotal" style="font-size: 2.5rem;">S/ 0.00</h1>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-secondary">Método de Pago:</label>
+                        <select class="form-select form-select-lg border-2 shadow-sm" id="metodoPago" onchange="verificarMetodoPago()">
+                            <option value="Efectivo">💵 Contado / Efectivo</option>
+                            <option value="Yape">📱 Yape</option>
+                            <option value="Plin">📱 Plin</option>
+                            <option value="Tarjeta">💳 Tarjeta de Crédito / Débito</option>
+                            <option value="Mixto">🔄 Pago Mixto (Varias formas)</option>
+                        </select>
+                    </div>
+
+                    <!-- DESGLOSE DE PAGO MIXTO (Oculto por defecto) -->
+                    <div id="seccionMixto" class="card border-0 bg-light p-3 mb-3" style="display: none;">
+                        <label class="form-label fw-bold text-dark mb-2">Desglose de Pago:</label>
+                        
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #198754; width: 100px;">Efectivo</span>
+                            <input type="number" step="0.01" class="form-control" id="montoEfectivo" placeholder="0.00" value="0">
+                        </div>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #6f42c1; width: 100px;">Yape</span>
+                            <input type="number" step="0.01" class="form-control" id="montoYape" placeholder="0.00" value="0">
+                        </div>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #0dcaf0; width: 100px;">Plin</span>
+                            <input type="number" step="0.01" class="form-control" id="montoPlin" placeholder="0.00" value="0">
+                        </div>
+                        <div class="input-group">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #6c757d; width: 100px;">Tarjeta</span>
+                            <input type="number" step="0.01" class="form-control" id="montoTarjeta" placeholder="0.00" value="0">
+                        </div>
+                        <small class="text-muted mt-2 text-center d-block" id="sugerenciaSuma">La suma debe igualar exactamente al total.</small>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light justify-content-between">
+                    <button type="button" class="btn btn-outline-secondary fw-bold px-4" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-success fw-bold px-4 fs-5" onclick="confirmarCobroEnBD()">
+                        ✅ CONFIRMAR COBRO
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+   
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- SCRIPT CON AGRUPADOR Y LÓGICA DE MESA -->
+   <script>
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const idCuenta = urlParams.get('id');
+        
+        let carritoMesa = [];         // Los tragos NUEVOS que agregas ahorita
+        let detallesGuardados = [];   // Los tragos VIEJOS que ya estaban en la base de datos
+        
+        let totalNuevo = 0;           // Plata de lo nuevo
+        let totalGuardado = 0;        // Plata de lo viejo
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('tituloMesa').innerText = `Mesa / Cuenta #${idCuenta || 'Desconocida'}`;
+            const buscador = document.getElementById('buscadorProductos');
+            if(buscador) buscador.addEventListener('input', buscarProductos);
+            
+            // 🚀 ESTO FALTABA: Al entrar, vamos a traer lo que ya consumieron
+            cargarHistorialMesa();
+        });
+
+        // 1. CARGAR LO QUE YA SE TOMARON ANTES
+        async function cargarHistorialMesa() {
+            try {
+                const res = await fetch(`http://localhost:3000/api/cuentas/${idCuenta}/detalle`);
+                const data = await res.json();
+                
+                if (data.success && data.detalles.length > 0) {
+                    detallesGuardados = data.detalles; // Guardamos el historial
+                }
+                renderizarMesa(); // Dibujamos la pantalla
+            } catch (error) {
+                console.error("Error cargando historial:", error);
+            }
+        }
+
+        // 2. BUSCADOR DE INVENTARIO
+        async function buscarProductos(e) {
+            const q = e.target.value.trim();
+            const cajaResultados = document.getElementById('resultadosBusqueda');
+            
+            if (q.length < 2) {
+                cajaResultados.innerHTML = '<div class="text-muted text-center py-4">Usa el buscador para agregar tragos.</div>';
+                return;
+            }
+            try {
+                const res = await fetch(`http://localhost:3000/api/productos/buscar?q=${q}`);
+                const data = await res.json();
+                cajaResultados.innerHTML = '';
+
+                if (data.success && data.productos.length > 0) {
+                    data.productos.forEach(prod => {
+                        cajaResultados.innerHTML += `
+                            <button class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" 
+                                onmousedown="event.preventDefault(); agregarATabla('${prod.nombre}', ${prod.precio_venta_unitario}, ${prod.id_producto}, ${prod.stock_unidades})">
+                                <div>
+                                    <strong class="text-teal">${prod.nombre}</strong><br>
+                                    <small class="text-muted">Stock: ${prod.stock_unidades}</small>
+                                </div>
+                                <span class="badge bg-success rounded-pill fs-6 shadow-sm">S/ ${parseFloat(prod.precio_venta_unitario).toFixed(2)}</span>
+                            </button>
+                        `;
+                    });
+                } else {
+                    cajaResultados.innerHTML = '<div class="text-muted text-center py-4">No hay productos con ese nombre.</div>';
+                }
+            } catch (error) { console.error("Error buscando:", error); }
+        }
+
+        // 3. AGREGAR TRAGO NUEVO A LA MESA
+        function agregarATabla(nombre, precio, id_producto, stock) {
+            let itemExistente = carritoMesa.find(item => item.id_producto === id_producto);
+
+            if (itemExistente) {
+                if (itemExistente.cantidad >= stock) return alert("¡Ya no hay más stock en almacén!");
+                itemExistente.cantidad++;
+            } else {
+                if (stock <= 0) return alert("¡Sin stock disponible!");
+                carritoMesa.push({ id_producto, nombre, precio: parseFloat(precio), cantidad: 1, stock });
+            }
+
+            const buscador = document.getElementById('buscadorProductos');
+            buscador.value = '';
+            buscador.focus();
+            document.getElementById('resultadosBusqueda').innerHTML = '<div class="text-muted text-center py-4">Usa el buscador para agregar tragos.</div>';
+            renderizarMesa();
+        }
+
+        function modificarCantidad(id_producto, accion) {
+            let item = carritoMesa.find(i => i.id_producto === id_producto);
+            if (!item) return;
+            if (accion === 'sumar') {
+                if (item.cantidad >= item.stock) return alert("Stock máximo alcanzado.");
+                item.cantidad++;
+            } else if (accion === 'restar') {
+                item.cantidad--;
+                if (item.cantidad === 0) carritoMesa = carritoMesa.filter(i => i.id_producto !== id_producto);
+            }
+            renderizarMesa();
+        }
+// 4. DIBUJAR LA LISTA (LOS VIEJOS Y LOS NUEVOS) - CORREGIDO
+        function renderizarMesa() {
+            const lista = document.getElementById('listaConsumo');
+            lista.innerHTML = '';
+            totalNuevo = 0;
+            totalGuardado = 0;
+
+            // A) Dibujamos los tragos guardados en la BD 
+            detallesGuardados.forEach(item => {
+                // 🚀 AQUÍ ESTABA EL ERROR: Obligamos a que el subtotal de MySQL sea número
+                let subtotalBD = parseFloat(item.subtotal) || 0; 
+                totalGuardado += subtotalBD;
+                
+                lista.innerHTML += `
+                    <li class="list-group-item d-flex justify-content-between align-items-center bg-light text-muted border-0 border-bottom p-3">
+                        <div style="width: 50%;">
+                            <div>✅ ${item.nombre}</div>
+                            <small>Ya despachado</small>
+                        </div>
+                        <div class="fw-bold px-3">Cant: ${item.cantidad}</div>
+                        <div class="fw-bold text-end" style="width: 25%;">S/ ${subtotalBD.toFixed(2)}</div>
+                    </li>
+                `;
+            });
+
+            // B) Dibujamos los tragos nuevos que agregas ahorita
+            carritoMesa.forEach(item => {
+                let subtotal = item.precio * item.cantidad;
+                totalNuevo += subtotal;
+                
+                lista.innerHTML += `
+                    <li class="list-group-item d-flex justify-content-between align-items-center border-0 border-bottom p-3 border-start border-4 border-success">
+                        <div style="width: 50%;">
+                            <div class="fw-bold text-success">🆕 ${item.nombre}</div>
+                            <small class="text-muted">S/ ${item.precio.toFixed(2)} c/u</small>
+                        </div>
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-outline-secondary fw-bold" onclick="modificarCantidad(${item.id_producto}, 'restar')">-</button>
+                            <span class="btn btn-light disabled text-dark fw-bold px-3">${item.cantidad}</span>
+                            <button type="button" class="btn btn-outline-secondary fw-bold" onclick="modificarCantidad(${item.id_producto}, 'sumar')">+</button>
+                        </div>
+                        <div class="fw-bold text-end" style="width: 25%;">S/ ${subtotal.toFixed(2)}</div>
+                    </li>
+                `;
+            });
+
+            // Si no hay nada, mostramos el mensaje
+            if (detallesGuardados.length === 0 && carritoMesa.length === 0) {
+                lista.innerHTML = '<li class="list-group-item text-center text-muted py-3">La mesa está vacía.</li>';
+            }
+
+            // Sumamos la plata vieja con la nueva
+            const granTotal = totalGuardado + totalNuevo;
+            document.getElementById('montoTotal').innerText = `S/ ${granTotal.toFixed(2)}`;
+        }
+
+        // 5. GUARDAR SOLO LO NUEVO Y REGRESAR
+        async function guardarMesa() {
+            if(carritoMesa.length === 0) return alert("No has agregado ningún trago nuevo para guardar.");
+
+            try {
+                
+                const response = await fetch('http://localhost:3000/api/cuentas/guardar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_cuenta: idCuenta,
+                        total_cuenta: totalNuevo,
+                        productos: carritoMesa   
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    window.location.href = 'cuentas.html';
+                } else {
+                    alert("Error al guardar: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error guardando mesa:", error);
+                alert("Error de conexión con el servidor.");
+            }
+        }
+let totalACobrar = 0; 
+       // 1. ABRIR EL MODAL AL DAR CLIC EN COBRAR
+        function cobrarMesa() {
+            
+            if(carritoMesa.length > 0) {
+                return alert("Tienes tragos nuevos marcados en verde. Dale a 'Guardar y seguir tomando' primero para registrarlos antes de cobrar.");
+            }
+            if(detallesGuardados.length === 0) return alert("No hay nada que cobrar en esta mesa.");
+
+            
+            totalACobrar = totalGuardado; 
+            document.getElementById('modalMontoTotal').innerText = `S/ ${totalACobrar.toFixed(2)}`;
+
+            
+            const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
+            modal.show();
+        }
+
+     // Enviar los montos desglosados al backend de forma segura
+        async function confirmarCobroEnBD() {
+            const metodoPago = document.getElementById('metodoPago').value;
+            const idCajaActiva = localStorage.getItem('id_caja_activa');
+
+            if (!idCajaActiva) return alert("Error: No tienes un turno de caja abierto.");
+
+            let pagoEfectivo = 0, pagoYape = 0, pagoPlin = 0, pagoTarjeta = 0;
+
+            if (metodoPago === 'Mixto') {
+                pagoEfectivo = parseFloat(document.getElementById('montoEfectivo').value) || 0;
+                pagoYape = parseFloat(document.getElementById('montoYape').value) || 0;
+                pagoPlin = parseFloat(document.getElementById('montoPlin').value) || 0;
+                pagoTarjeta = parseFloat(document.getElementById('montoTarjeta').value) || 0;
+
+                const sumaParcial = pagoEfectivo + pagoYape + pagoPlin + pagoTarjeta;
+                
+                // Validamos que cuadre exactamente con el total a cobrar
+                if (Math.abs(sumaParcial - totalACobrar) > 0.05) {
+                    return alert(`La suma del desglose (S/ ${sumaParcial.toFixed(2)}) no coincide con el total a cobrar de la mesa (S/ ${totalACobrar.toFixed(2)}).`);
+                }
+            } else {
+                // Si es pago simple, mandamos todo el total a su respectiva variable
+                if (metodoPago === 'Efectivo') pagoEfectivo = totalACobrar;
+                else if (metodoPago === 'Yape') pagoYape = totalACobrar;
+                else if (metodoPago === 'Plin') pagoPlin = totalACobrar;
+                else if (metodoPago === 'Tarjeta') pagoTarjeta = totalACobrar;
+            }
+
+            try {
+                const response = await fetch('http://localhost:3000/api/cuentas/cobrar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_cuenta: idCuenta,
+                        id_caja: idCajaActiva,
+                        monto: totalACobrar,
+                        pago_efectivo: pagoEfectivo,
+                        pago_yape: pagoYape,
+                        pago_plin: pagoPlin,
+                        pago_tarjeta: pagoTarjeta,
+                        id_usuario: localStorage.getItem('id_usuario') || 1
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert("¡Cobro exitoso y registrado en ventas!");
+                    window.location.href = 'cuentas.html';
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al cobrar:", error);
+                alert("Error de conexión con el servidor.");
+            }
+        }
+
+
+        // Mostrar u ocultar las cajas de texto si eligen Pago Mixto
+        function verificarMetodoPago() {
+            const metodo = document.getElementById('metodoPago').value;
+            const seccionMixto = document.getElementById('seccionMixto');
+
+            if (metodo === 'Mixto') {
+                seccionMixto.style.display = 'block';
+                // Inicializamos poniendo todo el total en efectivo por comodidad
+                document.getElementById('montoEfectivo').value = totalACobrar.toFixed(2);
+                document.getElementById('montoYape').value = '0.00';
+                document.getElementById('montoPlin').value = '0.00';
+                document.getElementById('montoTarjeta').value = '0.00';
+            } else {
+                seccionMixto.style.display = 'none';
+            }
+        }
+
+        // Modifica tu función cobrarMesa para que resetee el selector al abrir
+        function cobrarMesa() {
+            if(carritoMesa.length > 0) {
+                return alert("Tienes tragos nuevos marcados en verde. Dale a 'Guardar y seguir tomando' primero.");
+            }
+            if(detallesGuardados.length === 0) return alert("No hay nada que cobrar en esta mesa.");
+
+            totalACobrar = totalGuardado; 
+            document.getElementById('modalMontoTotal').innerText = `S/ ${totalACobrar.toFixed(2)}`;
+            document.getElementById('metodoPago').value = 'Efectivo';
+            document.getElementById('seccionMixto').style.display = 'none';
+
+            const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
+            modal.show();
+        }
+
+        // Enviar los montos desglosados al backend
+        async function confirmarCobroEnBD() {
+            const metodoPago = document.getElementById('metodoPago').value;
+            const idCajaActiva = localStorage.getItem('id_caja_activa');
+
+            if (!idCajaActiva) return alert("Error: No tienes un turno de caja abierto.");
+
+            let pagoEfectivo = 0, pagoYape = 0, pagoPlin = 0, pagoTarjeta = 0;
+
+            if (metodoPago === 'Mixto') {
+                pagoEfectivo = parseFloat(document.getElementById('montoEfectivo').value) || 0;
+                pagoYape = parseFloat(document.getElementById('montoYape').value) || 0;
+                pagoPlin = parseFloat(document.getElementById('montoPlin').value) || 0;
+                pagoTarjeta = parseFloat(document.getElementById('montoTarjeta').value) || 0;
+
+                const sumaParcial = pagoEfectivo + pagoYape + pagoPlin + pagoTarjeta;
+                
+                // Validamos que cuadre con el total (con margen mínimo por decimales)
+                if (Math.abs(sumaParcial - totalACobrar) > 0.05) {
+                    return alert(`La suma del desglose (S/ ${sumaParcial.toFixed(2)}) no coincide con el total a cobrar (S/ ${totalACobrar.toFixed(2)}).`);
+                }
+            } else {
+                if (metodoPago === 'Efectivo') pagoEfectivo = totalACobrar;
+                else if (metodoPago === 'Yape') pagoYape = totalACobrar;
+                else if (metodoPago === 'Plin') pagoPlin = totalACobrar;
+                else if (metodoPago === 'Tarjeta') pagoTarjeta = totalACobrar;
+            }
+
+            try {
+                const response = await fetch('http://localhost:3000/api/cuentas/cobrar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_cuenta: idCuenta,
+                        id_caja: idCajaActiva,
+                        monto: totalACobrar,
+                        pago_efectivo: pagoEfectivo,
+                        pago_yape: pagoYape,
+                        pago_plin: pagoPlin,
+                        pago_tarjeta: pagoTarjeta,
+                        id_usuario: localStorage.getItem('id_usuario') || 1
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert("¡Cobro exitoso y registrado en ventas!");
+                    window.location.href = 'cuentas.html';
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al cobrar:", error);
+                alert("Error de conexión con el servidor.");
+            }
+        }
+    </script>
+    
+</body>
+
+</html>

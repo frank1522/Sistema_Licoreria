@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Gastronómico - Iniciar Sesión</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <link rel="stylesheet" href="estilos-login.css">
+</head>
+<body>
+
+    <div class="card-login">
+        <div class="logo-container">🥂</div>
+
+        <h3>ERP Licorería</h3>
+        <p class="subtitle">Gestión Inteligente de tu Licorería</p>
+        
+        <form id="formLogin">
+    <div class="input-group-custom text-start">
+        <label for="username" class="form-label">Usuario</label>
+        <input type="text" class="form-control-custom" id="username" placeholder="Ingrese su usuario" required>
+    </div>
+    
+    <div class="input-group-custom text-start">
+        <label for="password" class="form-label">Contraseña</label>
+        <input type="password" class="form-control-custom" id="password" placeholder="••••••••" required>
+    </div>
+
+    <div class="form-check-custom">
+        <input type="checkbox" class="form-check-input-custom" id="remember">
+        <label class="form-check-label" for="remember">Recordar credenciales</label>
+    </div>
+
+    <button type="submit" class="btn-login-custom">INICIAR SESIÓN</button>
+
+    <p class="subtitle">Potenciado y realizado por Frank </p>
+</form>
+    </div>
+
+    <script>
+      document.getElementById('formLogin').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        // 1. Capturamos los valores reales usando los IDs originales de la plantilla
+        const txtUsuario = document.getElementById('username').value;
+        const txtPassword = document.getElementById('password').value; 
+
+        try {
+            // 2. Enviamos la petición con las llaves exactas que espera el backend
+            const res = await fetch('http://localhost:3000/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    usuario: txtUsuario, 
+                    contrasena: txtPassword  // Viaja limpio como 'contrasena' sin eñes en el JSON
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                alert(`¡Bienvenido de nuevo, ${data.usuario.nombre}!`);
+                
+                // Guardamos en la memoria del navegador (LocalStorage)
+                localStorage.setItem('id_usuario', data.usuario.id_usuario);
+                localStorage.setItem('rol', data.usuario.rol);
+                localStorage.setItem('nombre_usuario', data.usuario.nombre);
+
+                // Redirección inteligente según el rol de tu BD
+                if (data.usuario.rol === 'Administrador' || data.usuario.rol === 'Cajero') {
+                    window.location.href = 'caja.html'; 
+                } else {
+                    window.location.href = 'index.html'; 
+                }
+            } else {
+                alert("Error: " + data.message);
+            }
+        } catch (err) {
+            console.error("Error al conectar con el servidor:", err);
+            alert("No se pudo iniciar sesión, contacte a soporte.");
+        }
+    });
+    </script>
+</body>
+</html>

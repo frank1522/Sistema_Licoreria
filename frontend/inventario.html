@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Inventario</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <style>
+        /* Clase para ocultar elementos a los cajeros */
+        .solo-admin { display: none !important; }
+        /* Estilos base compartidos */
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .card-custom { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .btn-teal { background-color: #006D5B; color: white; transition: 0.3s; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+        .text-teal { color: #006D5B; }
+        .navbar-custom { background-color: #006D5B !important; }
+        .text-gold { color: #D4AF37 !important; }
+        
+        /* Tabla de Inventario */
+        .table-inventario th { background-color: #006D5B; color: white; font-weight: 500; }
+        .table-inventario td { vertical-align: middle; }
+        .badge-stock { font-size: 13px; padding: 6px 10px; border-radius: 6px; }
+        
+        /* Modales */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6); display: flex;
+            align-items: center; justify-content: center; z-index: 9999;
+        }
+        .oculto { display: none !important; }
+        .modal-custom {
+            background: #ffffff; width: 450px; border-radius: 8px;
+            overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .modal-header-custom {
+            background: #006D5B; color: #ffffff; padding: 15px 20px;
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 4px solid #D4AF37;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Tu Menú de Navegación -->
+    <div id="menu-container"></div>
+
+    <div class="container-fluid mt-4 px-4">
+        
+        <!-- CABECERA Y BUSCADOR -->
+        <div class="row mb-4 align-items-center">
+            <div class="col-md-4">
+                <h3 class="fw-bold m-0 text-teal">📦 Control de Inventario</h3>
+                <p class="text-muted m-0">Monitorea tu stock y realiza ajustes físicos.</p>
+            </div>
+            <div class="col-md-5">
+                <div class="input-group">
+                    <span class="input-group-text bg-white border-end-0">🔍</span>
+                    <input type="text" id="inputBuscarInventario" class="form-control border-start-0" placeholder="Buscar producto por nombre o código...">
+                </div>
+            </div>
+            <div class="col-md-3 text-end">
+                <button class="btn btn-outline-teal fw-bold px-3 py-2 me-2 border-2 text-teal" id="btnNuevoProducto">
+                    ✨ NUEVO PRODUCTO
+                </button>
+                <button class="btn btn-teal fw-bold px-2 py-2" id="btnNuevaCompra">
+                    🛒 REGISTRAR COMPRA
+                </button>
+            </div>
+        </div>
+
+        <!-- TABLA PRINCIPAL -->
+        <div class="card card-custom p-3">
+            <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
+                <table class="table table-hover table-inventario align-middle">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th width="12%">Código</th>
+                            <th width="30%">Producto</th>
+                            <th width="13%">Categoría</th>
+                            <th width="10%" class="text-center" id="thCosto">Costo</th>
+                            <th width="10%" class="text-center">Venta</th>
+                            <th width="10%" class="text-center">Stock Real</th>
+                            <th width="10%" class="text-center">Estado</th>
+                            <th width="5%" class="text-center" id="thAccion">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cuerpoInventario">
+                        <tr><td colspan="8" class="text-center text-muted py-4">Cargando inventario...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         MODAL: AJUSTE DE STOCK FÍSICO
+         ========================================== -->
+    <div id="modalAjuste" class="modal-overlay oculto">
+        <div class="modal-custom">
+            <div class="modal-header-custom" style="background-color: #d97706;">
+                <h4 class="m-0 fs-5">⚖️ Ajuste de Inventario</h4>
+                <button id="btnCerrarModalAjuste" class="btn text-white fs-4 p-0 border-0">&times;</button>
+            </div>
+            <div class="p-4">
+                <p class="mb-3 text-muted" style="font-size: 14px;">Ajusta el stock si encuentras diferencias físicas (ej. mermas, botellas rotas).</p>
+                
+                <div class="mb-3">
+                    <label class="fw-bold mb-1">Producto Seleccionado:</label>
+                    <input type="text" id="ajusteNombreProd" class="form-control bg-light" readonly>
+                    <input type="hidden" id="ajusteIdProd">
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Tipo de Ajuste:</label>
+                        <select id="ajusteTipo" class="form-select">
+                            <option value="Salida">📉 Salida (Merma/Resta)</option>
+                            <option value="Entrada">📈 Entrada (Suma)</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Cantidad:</label>
+                        <input type="number" id="ajusteCantidad" class="form-control" min="1" value="1">
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="fw-bold mb-1">Motivo del Ajuste:</label>
+                    <input type="text" id="ajusteMotivo" class="form-control" placeholder="Ej. Botella rota, consumo interno...">
+                </div>
+
+                <button id="btnGuardarAjuste" class="btn w-100 fw-bold text-white py-2" style="background-color: #d97706;">
+                    GUARDAR AJUSTE
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ==========================================
+         MODAL: REGISTRAR COMPRA A PROVEEDOR
+         ========================================== -->
+    <div id="modalCompra" class="modal-overlay oculto">
+        <div class="modal-custom" style="width: 800px; max-width: 95%;">
+            <div class="modal-header-custom">
+                <h4 class="m-0 fs-5">🛒 Registrar Nueva Compra (Ingreso de Mercadería)</h4>
+                <button id="btnCerrarModalCompra" class="btn text-white fs-4 p-0 border-0">&times;</button>
+            </div>
+            <div class="p-4" style="max-height: 85vh; overflow-y: auto;">
+                
+                <!-- Cabecera de la Factura -->
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="fw-bold mb-1">Proveedor:</label>
+                        <select id="selectProveedor" class="form-select"></select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="fw-bold mb-1">N° Comprobante (Factura/Guía):</label>
+                        <input type="text" id="inputComprobante" class="form-control" placeholder="Ej. F001-000543">
+                    </div>
+                </div>
+                <hr>
+                
+                <!-- Buscador de Productos -->
+                <div class="mb-3 position-relative">
+                    <label class="fw-bold mb-1 text-teal">Buscar producto a ingresar:</label>
+                    <input type="text" id="inputBuscarCompra" class="form-control border-2" placeholder="Escribe el nombre del producto...">
+                    <ul id="listaResultadosCompra" class="list-group position-absolute w-100 shadow" style="z-index: 1050; display: none; max-height: 200px; overflow-y: auto;"></ul>
+                </div>
+
+                <!-- Carrito de Compras -->
+                <table class="table table-bordered table-sm align-middle mt-2">
+                    <thead class="table-light">
+                        <tr>
+                            <th width="45%">Producto</th>
+                            <th width="20%" class="text-center">Costo Unit. (S/)</th>
+                            <th width="15%" class="text-center">Cant.</th>
+                            <th width="15%" class="text-center">Subtotal</th>
+                            <th width="5%"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cuerpoDetalleCompra">
+                        <tr><td colspan="5" class="text-center text-muted py-3">Busca y selecciona productos para agregar a la compra.</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- Total y Botón -->
+                <div class="d-flex justify-content-between align-items-center mt-4">
+                    <h4 class="fw-bold text-teal m-0">TOTAL: S/ <span id="txtTotalCompra">0.00</span></h4>
+                    <button id="btnGuardarCompra" class="btn btn-teal fw-bold px-4 py-2 text-gold">
+                        ✅ PROCESAR COMPRA
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- ==========================================
+         MODAL: GESTIÓN DE PRODUCTO (NUEVO/EDITAR)
+         ========================================== -->
+    <div id="modalProducto" class="modal-overlay oculto">
+        <div class="modal-custom">
+            <div class="modal-header-custom">
+                <h4 class="m-0 fs-5" id="tituloModalProducto">✨ Nuevo Producto</h4>
+                <button id="btnCerrarModalProducto" class="btn text-white fs-4 p-0 border-0">&times;</button>
+            </div>
+            <div class="p-4">
+                <input type="hidden" id="prodId">
+                
+                <div class="mb-3">
+                    <label class="fw-bold mb-1">Nombre del Producto:</label>
+                    <input type="text" id="prodNombre" class="form-control" placeholder="Ej. Ron Cartavio 750ml">
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Código de Barras:</label>
+                        <input type="text" id="prodCodigo" class="form-control" placeholder="Opcional">
+                    </div>
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Categoría:</label>
+                        <select id="prodCategoria" class="form-select"></select>
+                    </div>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="fw-bold mb-1 text-danger">Precio Costo (S/):</label>
+                        <input type="number" id="prodCosto" class="form-control" step="0.10" min="0">
+                    </div>
+                    <div class="col-6">
+                        <label class="fw-bold mb-1 text-success">Precio Venta (S/):</label>
+                        <input type="number" id="prodVenta" class="form-control" step="0.10" min="0">
+                    </div>
+                </div>
+                <!-- NUEVOS CAMPOS: Empaques y Precios Opcionales -->
+                <div class="row mb-3 bg-light p-2 rounded border">
+                    <div class="col-4">
+                        <label class="fw-bold mb-1" style="font-size: 13px;">Uds x Caja:</label>
+                        <input type="number" id="prodUnidadesCaja" class="form-control form-control-sm" value="12" min="1">
+                    </div>
+                    <div class="col-4">
+                        <label class="fw-bold mb-1" style="font-size: 13px;">S/ Sixpack:</label>
+                        <input type="number" id="prodPrecioSixpack" class="form-control form-control-sm" step="0.10" placeholder="Opcional">
+                    </div>
+                    <div class="col-4">
+                        <label class="fw-bold mb-1" style="font-size: 13px;">S/ Caja:</label>
+                        <input type="number" id="prodPrecioCaja" class="form-control form-control-sm" step="0.10" placeholder="Opcional">
+                    </div>
+                </div>
+
+                <div class="row mb-4">
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Stock Inicial:</label>
+                        <input type="number" id="prodStock" class="form-control" min="0" value="0">
+                        <small class="text-muted" id="txtNotaStock" style="font-size: 11px;">Solo se edita al crear.</small>
+                    </div>
+                    <div class="col-6">
+                        <label class="fw-bold mb-1">Alerta Stock Mínimo:</label>
+                        <input type="number" id="prodMinimo" class="form-control" min="1" value="10">
+                    </div>
+                </div>
+
+                <button id="btnGuardarProducto" class="btn btn-teal w-100 fw-bold py-2 text-gold">
+                    💾 GUARDAR PRODUCTO
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- SEGURIDAD INVENTARIO ---
+       const rolUsuario = localStorage.getItem('rol');
+        
+        if (rolUsuario !== 'Administrador') {
+            // Si es cajero, le ocultamos los botones de arriba
+            document.getElementById('btnNuevoProducto').classList.add('solo-admin');
+            document.getElementById('btnNuevaCompra').classList.add('solo-admin');
+        }
+        // 1. VARIABLES GLOBALES
+        const cuerpoInventario = document.getElementById('cuerpoInventario');
+        const inputBuscar = document.getElementById('inputBuscarInventario');
+        let inventarioGlobal = []; // Guardamos aquí los datos para filtrar rápido
+
+        // Modales
+        const modalAjuste = document.getElementById('modalAjuste');
+        
+        // 2. CARGAR INVENTARIO AL INICIAR
+        async function cargarInventario() {
+            try {
+                const res = await fetch('http://localhost:3000/api/inventario');
+                const data = await res.json();
+
+                if (data.success) {
+                    inventarioGlobal = data.inventario;
+                    renderizarTabla(inventarioGlobal);
+                } else {
+                    cuerpoInventario.innerHTML = `<tr><td colspan="8" class="text-center text-danger">${data.message}</td></tr>`;
+                }
+            } catch (error) {
+                console.error("Error cargando inventario:", error);
+                cuerpoInventario.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Error de conexión con el servidor.</td></tr>`;
+            }
+        }
+
+        // 3. DIBUJAR LA TABLA Y EL SEMÁFORO
+       function renderizarTabla(datos) {
+            cuerpoInventario.innerHTML = '';
+            
+            if (datos.length === 0) {
+                cuerpoInventario.innerHTML = '<tr><td colspan="8" class="text-center py-4">No se encontraron productos.</td></tr>';
+                return;
+            }
+
+            datos.forEach(prod => {
+                let badgeClass = '';
+                if (prod.estado_stock === 'Agotado') badgeClass = 'bg-danger';
+                else if (prod.estado_stock === 'Bajo') badgeClass = 'bg-warning text-dark';
+                else badgeClass = 'bg-success';
+
+                // Lógica de seguridad para celdas
+                const celdaCosto = rolUsuario === '1' ? `<td class="text-center text-muted">S/ ${parseFloat(prod.precio_costo_unitario).toFixed(2)}</td>` : '';
+                const celdaAcciones = rolUsuario === '1' ? `
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-outline-primary mb-1" onclick="abrirModalEditar(${prod.id_producto})" title="Editar">✏️</button>
+                        <button class="btn btn-sm btn-outline-secondary mb-1" onclick="abrirModalAjuste(${prod.id_producto}, '${prod.nombre}')" title="Ajustar Stock">⚖️</button>
+                    </td>` : '';
+
+                cuerpoInventario.innerHTML += `
+                    <tr>
+                        <td class="text-muted small">${prod.codigo_barras || 'S/C'}</td>
+                        <td class="fw-bold">${prod.nombre}</td>
+                        <td>${prod.categoria}</td>
+                        ${celdaCosto}
+                        <td class="text-center fw-bold">S/ ${parseFloat(prod.precio_venta_unitario).toFixed(2)}</td>
+                        <td class="text-center fs-5 fw-bold ${prod.stock_unidades <= prod.stock_minimo ? 'text-danger' : ''}">${prod.stock_unidades}</td>
+                        <td class="text-center">
+                            <span class="badge badge-stock ${badgeClass}">${prod.estado_stock}</span>
+                        </td>
+                        ${celdaAcciones}
+                    </tr>
+                `;
+            });
+
+            // Si es cajero, también ocultamos las cabeceras de la tabla
+            if (rolUsuario !== '1') {
+                document.getElementById('thCosto').style.display = 'none';
+                document.getElementById('thAccion').style.display = 'none';
+            }
+        }
+
+
+
+
+        // 4. BUSCADOR EN VIVO (Filtrado sin ir a base de datos)
+        inputBuscar.addEventListener('input', (e) => {
+            const texto = e.target.value.toLowerCase();
+            const filtrados = inventarioGlobal.filter(p => 
+                p.nombre.toLowerCase().includes(texto) || 
+                (p.codigo_barras && p.codigo_barras.toLowerCase().includes(texto))
+            );
+            renderizarTabla(filtrados);
+        });
+
+        // 5. LÓGICA DEL MODAL DE AJUSTE
+        window.abrirModalAjuste = (id, nombre) => {
+            document.getElementById('ajusteIdProd').value = id;
+            document.getElementById('ajusteNombreProd').value = nombre;
+            document.getElementById('ajusteCantidad').value = 1;
+            document.getElementById('ajusteMotivo').value = '';
+            modalAjuste.classList.remove('oculto');
+        };
+
+        document.getElementById('btnCerrarModalAjuste').onclick = () => modalAjuste.classList.add('oculto');
+
+        document.getElementById('btnGuardarAjuste').onclick = async () => {
+            const idProd = document.getElementById('ajusteIdProd').value;
+            const tipo = document.getElementById('ajusteTipo').value;
+            const cantidad = parseInt(document.getElementById('ajusteCantidad').value);
+            const motivo = document.getElementById('ajusteMotivo').value.trim();
+            const idUsuario = localStorage.getItem('id_usuario') || 1; // Por ahora asume 1 si falla
+
+            if (isNaN(cantidad) || cantidad <= 0) return alert("Ingrese una cantidad válida mayor a cero.");
+            if (motivo === "") return alert("Debe ingresar un motivo para el ajuste.");
+
+            try {
+                const response = await fetch('http://localhost:3000/api/inventario/ajuste', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_producto: idProd, id_usuario: idUsuario,
+                        tipo_ajuste: tipo, cantidad: cantidad, motivo: motivo
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    modalAjuste.classList.add('oculto');
+                    cargarInventario(); // Recargamos la tabla para ver el nuevo stock
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                alert("Error conectando con el servidor.");
+            }
+        };
+// ==========================================
+        // 6. LÓGICA DEL MÓDULO DE COMPRAS
+        // ==========================================
+        const modalCompra = document.getElementById('modalCompra');
+        const inputBuscarCompra = document.getElementById('inputBuscarCompra');
+        const listaResultadosCompra = document.getElementById('listaResultadosCompra');
+        const cuerpoDetalleCompra = document.getElementById('cuerpoDetalleCompra');
+        let carritoCompra = [];
+
+        // Abrir y cerrar modal
+        document.getElementById('btnNuevaCompra').onclick = async () => {
+            modalCompra.classList.remove('oculto');
+            carritoCompra = []; // Limpiamos la lista
+            document.getElementById('inputComprobante').value = '';
+            renderizarCarritoCompra();
+            
+            // Cargar proveedores desde la BD
+            try {
+                const res = await fetch('http://localhost:3000/api/proveedores');
+                const data = await res.json();
+                if (data.success) {
+                    const select = document.getElementById('selectProveedor');
+                    select.innerHTML = '<option value="">Seleccione un proveedor...</option>';
+                    data.proveedores.forEach(prov => {
+                        select.innerHTML += `<option value="${prov.id_proveedor}">${prov.razon_social}</option>`;
+                    });
+                }
+            } catch (e) { console.error("Error cargando proveedores"); }
+        };
+
+        document.getElementById('btnCerrarModalCompra').onclick = () => modalCompra.classList.add('oculto');
+
+        // Buscador Inteligente usando el inventario global que ya cargamos
+        inputBuscarCompra.addEventListener('input', (e) => {
+            const texto = e.target.value.toLowerCase().trim();
+            listaResultadosCompra.innerHTML = '';
+            
+            if (texto.length < 2) {
+                listaResultadosCompra.style.display = 'none';
+                return;
+            }
+
+            const filtrados = inventarioGlobal.filter(p => p.nombre.toLowerCase().includes(texto));
+            
+            filtrados.forEach(prod => {
+                const li = document.createElement('li');
+                li.className = 'list-group-item list-group-item-action cursor-pointer';
+                li.innerHTML = `<strong>${prod.nombre}</strong> <br><small class="text-muted">Costo actual: S/ ${prod.precio_costo_unitario}</small>`;
+                li.onmousedown = (ev) => {
+                    ev.preventDefault();
+                    agregarACompra(prod);
+                    inputBuscarCompra.value = '';
+                    listaResultadosCompra.style.display = 'none';
+                };
+                listaResultadosCompra.appendChild(li);
+            });
+            listaResultadosCompra.style.display = filtrados.length > 0 ? 'block' : 'none';
+        });
+
+        // Funciones del carrito de compras
+        function agregarACompra(prod) {
+            const existe = carritoCompra.find(p => p.id_producto === prod.id_producto);
+            if (existe) {
+                existe.cantidad++;
+            } else {
+                carritoCompra.push({
+                    id_producto: prod.id_producto,
+                    nombre: prod.nombre,
+                    precio_compra: parseFloat(prod.precio_costo_unitario), // Sugiere el costo actual
+                    cantidad: 1
+                });
+            }
+            renderizarCarritoCompra();
+        }
+
+        function renderizarCarritoCompra() {
+            cuerpoDetalleCompra.innerHTML = '';
+            let total = 0;
+
+            if (carritoCompra.length === 0) {
+                cuerpoDetalleCompra.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Busca y selecciona productos para agregar a la compra.</td></tr>';
+                document.getElementById('txtTotalCompra').textContent = '0.00';
+                return;
+            }
+
+            carritoCompra.forEach((item, index) => {
+                const subtotal = item.precio_compra * item.cantidad;
+                total += subtotal;
+
+                cuerpoDetalleCompra.innerHTML += `
+                    <tr>
+                        <td class="fw-bold" style="font-size: 14px;">${item.nombre}</td>
+                        <td>
+                            <input type="number" class="form-control form-control-sm text-center" step="0.10" value="${item.precio_compra.toFixed(2)}" onchange="actualizarCompra(${index}, 'precio', this.value)">
+                        </td>
+                        <td>
+                            <input type="number" class="form-control form-control-sm text-center" min="1" value="${item.cantidad}" onchange="actualizarCompra(${index}, 'cantidad', this.value)">
+                        </td>
+                        <td class="text-center fw-bold text-teal">S/ ${subtotal.toFixed(2)}</td>
+                        <td class="text-center">
+                            <button class="btn btn-sm btn-outline-danger" onclick="eliminarDeCompra(${index})">🗑️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            document.getElementById('txtTotalCompra').textContent = total.toFixed(2);
+        }
+
+        window.actualizarCompra = (index, campo, valor) => {
+            const val = parseFloat(valor);
+            if (val > 0) {
+                if (campo === 'precio') carritoCompra[index].precio_compra = val;
+                if (campo === 'cantidad') carritoCompra[index].cantidad = parseInt(val);
+            }
+            renderizarCarritoCompra();
+        };
+
+        window.eliminarDeCompra = (index) => {
+            carritoCompra.splice(index, 1);
+            renderizarCarritoCompra();
+        };
+
+        // Enviar al Backend
+        document.getElementById('btnGuardarCompra').onclick = async () => {
+            const idProveedor = document.getElementById('selectProveedor').value;
+            const comprobante = document.getElementById('inputComprobante').value.trim();
+            const idUsuario = localStorage.getItem('id_usuario');
+            const totalCompra = parseFloat(document.getElementById('txtTotalCompra').textContent);
+
+            if (!idProveedor) return alert("Seleccione un proveedor.");
+            if (carritoCompra.length === 0) return alert("Agregue al menos un producto a la compra.");
+
+            // Desactivar botón para evitar doble clic
+            const btn = document.getElementById('btnGuardarCompra');
+            btn.disabled = true; btn.textContent = "⏳ Guardando...";
+
+            try {
+                const response = await fetch('http://localhost:3000/api/compras/registrar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_proveedor: idProveedor, id_usuario: idUsuario,
+                        numero_comprobante: comprobante, total: totalCompra,
+                        detalles: carritoCompra
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    modalCompra.classList.add('oculto');
+                    cargarInventario(); // Recargamos para ver el stock inflado y precios actualizados
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                alert("Error de conexión con el servidor.");
+            } finally {
+                btn.disabled = false; btn.innerHTML = "✅ PROCESAR COMPRA";
+            }
+        }
+        cargarInventario();
+       
+        const modalProducto = document.getElementById('modalProducto');
+        
+        // Cargar Categorías
+        async function cargarCategoriasSelect() {
+            try {
+                const res = await fetch('http://localhost:3000/api/categorias');
+                const data = await res.json();
+                if (data.success) {
+                    const select = document.getElementById('prodCategoria');
+                    select.innerHTML = '';
+                    data.categorias.forEach(cat => {
+                        select.innerHTML += `<option value="${cat.id_categoria}">${cat.nombre}</option>`;
+                    });
+                }
+            } catch (e) { console.error("Error cargando categorías"); }
+        }
+
+        // ABRIR NUEVO
+        document.getElementById('btnNuevoProducto').onclick = () => {
+            cargarCategoriasSelect();
+            document.getElementById('tituloModalProducto').innerHTML = '✨ Nuevo Producto';
+            document.getElementById('prodId').value = '';
+            document.getElementById('prodNombre').value = '';
+            document.getElementById('prodCodigo').value = '';
+            document.getElementById('prodCosto').value = '';
+            document.getElementById('prodVenta').value = '';
+            document.getElementById('prodStock').value = '0';
+            document.getElementById('prodMinimo').value = '10';
+            document.getElementById('prodUnidadesCaja').value = '12'; // Por defecto
+            document.getElementById('prodPrecioSixpack').value = '';
+            document.getElementById('prodPrecioCaja').value = '';
+            
+            // Habilitar campo de stock inicial
+            document.getElementById('prodStock').disabled = false;
+            document.getElementById('txtNotaStock').style.display = 'block';
+            
+            modalProducto.classList.remove('oculto');
+        };
+
+        // ABRIR PARA EDITAR (Llamado desde el botón ✏️ de la tabla)
+        window.abrirModalEditar = (id) => {
+            cargarCategoriasSelect();
+            // Buscar el producto en nuestro array global
+            const prod = inventarioGlobal.find(p => p.id_producto === id);
+            if(!prod) return;
+
+            document.getElementById('tituloModalProducto').innerHTML = '✏️ Editar Producto';
+            document.getElementById('prodId').value = prod.id_producto;
+            document.getElementById('prodNombre').value = prod.nombre;
+            document.getElementById('prodCodigo').value = prod.codigo_barras || '';
+            document.getElementById('prodCosto').value = prod.precio_costo_unitario;
+            document.getElementById('prodVenta').value = prod.precio_venta_unitario;
+            document.getElementById('prodMinimo').value = prod.stock_minimo;
+            document.getElementById('prodUnidadesCaja').value = prod.unidades_por_caja || '12';
+            document.getElementById('prodPrecioSixpack').value = prod.precio_venta_sixpack || '';
+            document.getElementById('prodPrecioCaja').value = prod.precio_venta_caja || '';
+            
+            // Bloquear campo de stock (se ajusta por otro lado)
+            document.getElementById('prodStock').value = prod.stock_unidades;
+            document.getElementById('prodStock').disabled = true;
+            document.getElementById('txtNotaStock').style.display = 'none';
+
+            // Seleccionar la categoría correcta (es un pequeño truco asíncrono)
+            setTimeout(() => {
+                const selectCat = document.getElementById('prodCategoria');
+                for(let i=0; i<selectCat.options.length; i++) {
+                    if(selectCat.options[i].text === prod.categoria) selectCat.selectedIndex = i;
+                }
+            }, 100);
+
+            modalProducto.classList.remove('oculto');
+        };
+
+        document.getElementById('btnCerrarModalProducto').onclick = () => modalProducto.classList.add('oculto');
+
+        // GUARDAR (CREAR O EDITAR)
+        document.getElementById('btnGuardarProducto').onclick = async () => {
+            const id = document.getElementById('prodId').value;
+           const payload = {
+                codigo_barras: document.getElementById('prodCodigo').value.trim() || null,
+                nombre: document.getElementById('prodNombre').value.trim(),
+                id_categoria: document.getElementById('prodCategoria').value,
+                precio_costo: parseFloat(document.getElementById('prodCosto').value),
+                precio_venta: parseFloat(document.getElementById('prodVenta').value),
+                stock_inicial: parseInt(document.getElementById('prodStock').value) || 0,
+                stock_minimo: parseInt(document.getElementById('prodMinimo').value) || 10,
+                
+                // NUEVOS DATOS
+                unidades_caja: parseInt(document.getElementById('prodUnidadesCaja').value) || 12,
+                precio_sixpack: document.getElementById('prodPrecioSixpack').value ? parseFloat(document.getElementById('prodPrecioSixpack').value) : null,
+                precio_caja: document.getElementById('prodPrecioCaja').value ? parseFloat(document.getElementById('prodPrecioCaja').value) : null
+            };
+
+            if(!payload.nombre || isNaN(payload.precio_venta)) return alert("El nombre y el precio de venta son obligatorios.");
+
+            const url = id ? `http://localhost:3000/api/productos/editar/${id}` : `http://localhost:3000/api/productos/nuevo`;
+            const metodo = id ? 'PUT' : 'POST';
+
+            try {
+                const response = await fetch(url, {
+                    method: metodo,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    modalProducto.classList.add('oculto');
+                    cargarInventario();
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                alert("Error de conexión al guardar producto.");
+            }
+        }; 
+
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script>
+</body>
+</html>
