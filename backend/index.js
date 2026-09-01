@@ -148,20 +148,32 @@ app.get('/api/caja/arqueo/:id_caja', async (req, res) => {
         const [ingresos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total_ingresos FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Ingreso'", [id_caja]);
         const totalIngresos = Number(ingresos[0].total_ingresos);
 
-        // 🌟 NUEVO: Sumar todas las ventas cobradas en EFECTIVO en este turno
-        const [ventas] = await db.promise().query("SELECT IFNULL(SUM(pago_efectivo), 0) AS total_ventas_efectivo FROM ventas WHERE id_caja = ?", [id_caja]);
-        const totalVentasEfectivo = Number(ventas[0].total_ventas_efectivo);
-
-        // El saldo neto ahora incluye las ventas
-        const saldoNeto = (montoInicial + totalIngresos + totalVentasEfectivo) - totalGastos;
+        // 🌟 AQUÍ ESTÁ LA MAGIA: Sumamos todos los métodos de pago de la tabla ventas (incluye mesas y directas)
+        const sqlVentas = `
+            SELECT 
+                IFNULL(SUM(pago_efectivo), 0) AS efectivo,
+                IFNULL(SUM(pago_yape), 0) AS yape,
+                IFNULL(SUM(pago_plin), 0) AS plin,
+                IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
+            FROM ventas 
+            WHERE id_caja = ?
+        `;
+        const [ventas] = await db.promise().query(sqlVentas, [id_caja]);
+        
+        const totalEfectivo = Number(ventas[0].efectivo);
+        const totalYape = Number(ventas[0].yape);
+        const totalPlin = Number(ventas[0].plin);
+        const totalTarjeta = Number(ventas[0].tarjeta);
 
         res.json({
             success: true,
             monto_inicial: montoInicial,
             total_gastos: totalGastos,
             total_ingresos: totalIngresos,
-            total_ventas: totalVentasEfectivo,
-            saldo_neto: saldoNeto
+            total_efectivo: totalEfectivo,
+            total_yape: totalYape,
+            total_plin: totalPlin,
+            total_tarjeta: totalTarjeta
         });
 
     } catch (err) {

@@ -129,26 +129,51 @@
                 <div class="card card-custom p-4 h-100">
                     <h5 class="fw-bold mb-4">Resumen de Caja (Arqueo en Tiempo Real)</h5>
                     
-                    <table class="table table-borderless fs-5">
+                    <table class="table table-borderless fs-6">
+                        <!-- SECCIÓN 1: EFECTIVO FÍSICO (Lo que debe estar en la gaveta) -->
                         <tr>
-                            <td>💰 Monto Inicial:</td>
+                            <td colspan="2" class="fw-bold fs-5 text-dark border-bottom pb-2">💵 Control de Efectivo (Gaveta)</td>
+                        </tr>
+                        <tr>
+                            <td>💰 Monto Inicial (Sencillo):</td>
                             <td class="text-end fw-bold text-secondary">S/ <span id="montoInicial">0.00</span></td>
                         </tr>
                         <tr>
-                            <td>📈 Ventas del Turno:</td>
-                            <td class="text-end fw-bold text-success">+ S/ <span id="montoVentas">0.00</span></td>
+                            <td>📈 Ventas en Efectivo:</td>
+                            <td class="text-end fw-bold text-success">+ S/ <span id="montoEfectivo">0.00</span></td>
                         </tr>
                         <tr>
-                            <td>📉 Ingresos:</td>
+                            <td>📉 Ingresos Extra (Movimientos):</td>
                             <td class="text-end fw-bold text-success">+ S/ <span id="montoIngresos">0.00</span></td>
                         </tr>
                         <tr>
-                            <td>📉  Egresos:</td>
+                            <td>📉 Egresos (Gastos físicos):</td>
                             <td class="text-end fw-bold text-danger">- S/ <span id="montoEgresos">0.00</span></td>
                         </tr>
-                        <tr class="border-top">
-                            <td class="fw-bold pt-3">💵 Saldo Neto Estimado:</td>
-                            <td class="text-end fw-bold text-primary pt-3 fs-4">S/ <span id="montoNeto">0.00</span></td>
+                        <tr class="border-top bg-light">
+                            <td class="fw-bold pt-3 fs-5">💵 Efectivo Esperado en Caja:</td>
+                            <td class="text-end fw-bold text-primary pt-3 fs-4">S/ <span id="montoNetoEfectivo">0.00</span></td>
+                        </tr>
+
+                        <!-- SECCIÓN 2: PAGOS DIGITALES (Lo que fue a la cuenta bancaria) -->
+                        <tr>
+                            <td colspan="2" class="fw-bold fs-5 text-dark border-bottom pb-2 pt-4">📱 Pagos Digitales</td>
+                        </tr>
+                        <tr>
+                            <td>🟣 Yape:</td>
+                            <td class="text-end fw-bold text-success">+ S/ <span id="montoYape">0.00</span></td>
+                        </tr>
+                        <tr>
+                            <td>🔵 Plin:</td>
+                            <td class="text-end fw-bold text-success">+ S/ <span id="montoPlin">0.00</span></td>
+                        </tr>
+                        <tr>
+                            <td>💳 Tarjeta de Crédito/Débito:</td>
+                            <td class="text-end fw-bold text-success">+ S/ <span id="montoTarjeta">0.00</span></td>
+                        </tr>
+                        <tr class="border-top bg-light">
+                            <td class="fw-bold pt-3">📱 Total Digital Acumulado:</td>
+                            <td class="text-end fw-bold text-teal pt-3 fs-5" style="color: #006D5B;">S/ <span id="montoNetoDigital">0.00</span></td>
                         </tr>
                     </table>
                 </div>
@@ -239,15 +264,11 @@
 </div>
 
     <script>
-
-
-    
         // 2. REFERENCIAS A ELEMENTOS DEL DOM
         const badgeEstado = document.getElementById('estadoCajaBadge');
         const btnAbrirCajaUi = document.getElementById('btnAbrirCajaUi');
         const btnMovimiento = document.getElementById('btnMovimiento');
         const btnCerrarCaja = document.getElementById('btnCerrarCaja');
-        const txtMontoInicial = document.getElementById('montoInicial');
         
         // Referencias del Modal
         const modalApertura = document.getElementById('modalApertura');
@@ -255,125 +276,30 @@
         const btnConfirmarApertura = document.getElementById('btnConfirmarApertura');
         const inputMontoInicial = document.getElementById('inputMontoInicial');
 
-        // 3. FUNCIÓN PARA CONSULTAR EL ESTADO DE LA CAJA AL CARGAR
-        async function verificarEstadoCaja() {
-            try {
-                const res = await fetch('http://localhost:3000/api/caja/estado');
-                const data = await res.json();
-
-                if (data.success && data.cajaAbierta) {
-                    // CAJA ABIERTA: Pinta verde y bloquea el botón de abrir
-                    badgeEstado.textContent = 'CAJA ABIERTA';
-                    badgeEstado.className = 'badge badge-abierta fs-5 px-4 py-2';
-                    
-                    btnAbrirCajaUi.disabled = true;
-                    btnMovimiento.disabled = false;
-                    btnCerrarCaja.disabled = false;
-
-                    // Muestra el monto inicial en el resumen
-                    txtMontoInicial.textContent = parseFloat(data.datosCaja.monto_inicial).toFixed(2);
-                } else {
-                    // CAJA CERRADA: Pinta rojo y habilita el botón de abrir
-                    badgeEstado.textContent = 'CAJA CERRADA';
-                    badgeEstado.className = 'badge badge-cerrada fs-5 px-4 py-2';
-                    
-                    btnAbrirCajaUi.disabled = false;
-                    btnMovimiento.disabled = true;
-                    btnCerrarCaja.disabled = true;
-                }
-            } catch (error) {
-                console.error("Error al consultar caja:", error);
-                badgeEstado.textContent = 'ERROR DE CONEXIÓN';
-            }
-        }
-
-        // Ejecutamos la verificación apenas carga la página
-        verificarEstadoCaja();
-
-        // 4. LÓGICA DEL MODAL DE APERTURA
-        btnAbrirCajaUi.addEventListener('click', () => {
-            modalApertura.classList.remove('oculto');
-            inputMontoInicial.value = ''; 
-            inputMontoInicial.focus(); 
-        });
-
-        btnCerrarModal.addEventListener('click', () => {
-            modalApertura.classList.add('oculto');
-        });
-
         // Referencias para el Modal de Movimientos
-const btnMovimientoUi = document.getElementById('btnMovimiento'); // Tu botón gris de movimientos
-const modalMovimiento = document.getElementById('modalMovimiento');
-const btnCerrarModalMov = document.getElementById('btnCerrarModalMov');
-const btnConfirmarMov = document.getElementById('btnConfirmarMov');
-const selectTipoMov = document.getElementById('selectTipoMov');
-const inputMontoMov = document.getElementById('inputMontoMov');
-const inputMotivoMov = document.getElementById('inputMotivoMov');
+        const btnMovimientoUi = document.getElementById('btnMovimiento'); 
+        const modalMovimiento = document.getElementById('modalMovimiento');
+        const btnCerrarModalMov = document.getElementById('btnCerrarModalMov');
+        const btnConfirmarMov = document.getElementById('btnConfirmarMov');
+        const selectTipoMov = document.getElementById('selectTipoMov');
+        const inputMontoMov = document.getElementById('inputMontoMov');
+        const inputMotivoMov = document.getElementById('inputMotivoMov');
 
-// 1. Abrir modal al hacer clic en el botón de movimientos
-btnMovimientoUi.addEventListener('click', () => {
-    modalMovimiento.classList.remove('oculto');
-    inputMontoMov.value = '';
-    inputMotivoMov.value = '';
-    selectTipoMov.value = 'Gasto';
-    inputMontoMov.focus();
-});
+        // 1. Abrir modal al hacer clic en el botón de movimientos
+        btnMovimientoUi.addEventListener('click', () => {
+            modalMovimiento.classList.remove('oculto');
+            inputMontoMov.value = '';
+            inputMotivoMov.value = '';
+            selectTipoMov.value = 'Gasto';
+            inputMontoMov.focus();
+        });
 
-// 2. Cerrar con la X
-btnCerrarModalMov.addEventListener('click', () => {
-    modalMovimiento.classList.add('oculto');
-});
+        // 2. Cerrar con la X
+        btnCerrarModalMov.addEventListener('click', () => {
+            modalMovimiento.classList.add('oculto');
+        });
 
-// // 3. Enviar el movimiento al backend
-// btnConfirmarMov.addEventListener('click', async () => {
-//     const tipo = selectTipoMov.value;
-//     const monto = parseFloat(inputMontoMov.value);
-//     const motivo = inputMotivoMov.value.trim();
-//     const idCajaActiva = localStorage.getItem('id_caja_activa');
-
-//     if (!idCajaActiva) {
-//         alert("Error: No hay una caja activa registrada en la sesión.");
-//         return;
-//     }
-
-//     if (isNaN(monto) || monto <= 0) {
-//         alert("Por favor, ingrese un monto válido mayor a cero.");
-//         return;
-//     }
-
-//     if (motivo === "") {
-//         alert("Debe especificar un motivo o concepto para el movimiento.");
-//         return;
-//     }
-
-//     try {
-//         const response = await fetch('http://localhost:3000/api/caja/movimiento', {
-//             method: 'POST',
-//             headers: { 'Content-Type': 'application/json' },
-//             body: JSON.stringify({
-//                 id_caja: idCajaActiva,
-//                 tipo: tipo,
-//                 monto: monto,
-//                 motivo: motivo
-//             })
-//         });
-
-//         const data = await response.json();
-
-//         if (data.success) {
-//             alert(data.message);
-//             modalMovimiento.classList.add('oculto');
-//             // Aquí puedes actualizar algún indicador o recargar si deseas ver el reflejo
-//         } else {
-//             alert("Error: " + data.message);
-//         }
-//     } catch (error) {
-//         console.error("Error al registrar movimiento:", error);
-//         alert("Error de conexión con el servidor.");
-//     }
-// });
-
-// 1. FUNCIÓN PARA CONSULTAR Y ACTUALIZAR LOS NÚMEROS EN VIVO
+        // 1. FUNCIÓN PARA CONSULTAR Y ACTUALIZAR LOS NÚMEROS DESGLOSADOS EN VIVO
         async function actualizarArqueoEnVivo() {
             const idCajaActiva = localStorage.getItem('id_caja_activa');
             if (!idCajaActiva) return;
@@ -383,20 +309,35 @@ btnCerrarModalMov.addEventListener('click', () => {
                 const data = await res.json();
 
                 if (data.success) {
-                    // 1. Pintamos el dinero inicial
-                    document.getElementById('montoInicial').textContent = data.monto_inicial.toFixed(2);
-                    
-                    // 2. Pintamos los ingresos extra (sencillo que metió el dueño, etc)
-                    document.getElementById('montoIngresos').textContent = data.total_ingresos.toFixed(2);
-                    
-                    // 3. Pintamos la plata de las ventas en EFECTIVO
-                    document.getElementById('montoVentas').textContent = data.total_ventas.toFixed(2); 
-                    
-                    // 4. Pintamos los gastos (comida, pago a proveedor, etc)
-                    document.getElementById('montoEgresos').textContent = data.total_gastos.toFixed(2);
-                    
-                    // 🌟 5. EL SALDO NETO: Pintamos directamente lo que calculó el backend
-                    document.getElementById('montoNeto').textContent = data.saldo_neto.toFixed(2);
+                    // --- VARIABLES DE EFECTIVO FÍSICO ---
+                    const inicial = parseFloat(data.monto_inicial) || 0;
+                    const ventasEfectivo = parseFloat(data.total_efectivo) || 0; 
+                    const ingresosExtra = parseFloat(data.total_ingresos) || 0;
+                    const egresosExtra = parseFloat(data.total_gastos) || 0;
+
+                    // Pintar datos físicos
+                    document.getElementById('montoInicial').textContent = inicial.toFixed(2);
+                    document.getElementById('montoEfectivo').textContent = ventasEfectivo.toFixed(2);
+                    document.getElementById('montoIngresos').textContent = ingresosExtra.toFixed(2);
+                    document.getElementById('montoEgresos').textContent = egresosExtra.toFixed(2);
+
+                    // 🌟 CÁLCULO DEL EFECTIVO FÍSICO (Lo que el cajero debe contar con la mano)
+                    const efectivoEsperado = inicial + ventasEfectivo + ingresosExtra - egresosExtra;
+                    document.getElementById('montoNetoEfectivo').textContent = efectivoEsperado.toFixed(2);
+
+                    // --- VARIABLES DE PAGOS DIGITALES ---
+                    const yape = parseFloat(data.total_yape) || 0;
+                    const plin = parseFloat(data.total_plin) || 0;
+                    const tarjeta = parseFloat(data.total_tarjeta) || 0;
+
+                    // Pintar datos digitales
+                    document.getElementById('montoYape').textContent = yape.toFixed(2);
+                    document.getElementById('montoPlin').textContent = plin.toFixed(2);
+                    document.getElementById('montoTarjeta').textContent = tarjeta.toFixed(2);
+
+                    // 🌟 CÁLCULO TOTAL DIGITAL (Lo que fue al banco)
+                    const totalDigital = yape + plin + tarjeta;
+                    document.getElementById('montoNetoDigital').textContent = totalDigital.toFixed(2);
                 }
             } catch (error) {
                 console.error("Error al actualizar arqueo:", error);
@@ -434,6 +375,17 @@ btnCerrarModalMov.addEventListener('click', () => {
         // Ejecutar al cargar
         verificarEstadoCaja();
 
+        // LÓGICA DEL MODAL DE APERTURA
+        btnAbrirCajaUi.addEventListener('click', () => {
+            modalApertura.classList.remove('oculto');
+            inputMontoInicial.value = ''; 
+            inputMontoInicial.focus(); 
+        });
+
+        btnCerrarModal.addEventListener('click', () => {
+            modalApertura.classList.add('oculto');
+        });
+
         // 3. LLÁMALA AQUÍ TAMBIÉN: En el botón que guarda el movimiento
         btnConfirmarMov.addEventListener('click', async () => {
             const tipo = selectTipoMov.value;
@@ -441,7 +393,20 @@ btnCerrarModalMov.addEventListener('click', () => {
             const motivo = inputMotivoMov.value.trim();
             const idCajaActiva = localStorage.getItem('id_caja_activa');
 
-            // ... (tus validaciones de que no esté vacío) ...
+            if (!idCajaActiva) {
+                alert("Error: No hay una caja activa registrada en la sesión.");
+                return;
+            }
+
+            if (isNaN(monto) || monto <= 0) {
+                alert("Por favor, ingrese un monto válido mayor a cero.");
+                return;
+            }
+
+            if (motivo === "") {
+                alert("Debe especificar un motivo o concepto para el movimiento.");
+                return;
+            }
 
             try {
                 const response = await fetch('http://localhost:3000/api/caja/movimiento', {
@@ -456,111 +421,110 @@ btnCerrarModalMov.addEventListener('click', () => {
                     alert(data.message);
                     modalMovimiento.classList.add('oculto');
                     
-                    // 🔑 LLAMADA 2: ¡Aquí está el truco! Apenas guarda el gasto, actualiza la pantalla al instante
+                    // 🔑 LLAMADA 2: Apenas guarda el gasto, actualiza la pantalla al instante
                     actualizarArqueoEnVivo();
                 } else {
                     alert("Error: " + data.message);
                 }
             } catch (error) {
                 console.error("Error al registrar movimiento:", error);
+                alert("Error de conexión con el servidor.");
             }
         });
-// 5. ENVIAR APERTURA AL BACKEND
-   // ENVIAR APERTURA AL BACKEND
-btnConfirmarApertura.addEventListener('click', async () => {
-    const monto = parseFloat(inputMontoInicial.value);
-    
-    // 👉 AQUÍ ESTÁ EL ARREGLO: Jalamos el ID del usuario o le ponemos 1 (Admin) por defecto
-    const idUsuario = localStorage.getItem('id_usuario') || 1; 
 
-    if (isNaN(monto) || monto < 0) {
-        alert("Por favor, ingrese un monto válido mayor o igual a 0.");
-        return;
-    }
+        // 5. ENVIAR APERTURA AL BACKEND
+        btnConfirmarApertura.addEventListener('click', async () => {
+            const monto = parseFloat(inputMontoInicial.value);
+            
+            // Jalamos el ID del usuario o le ponemos 1 (Admin) por defecto
+            const idUsuario = localStorage.getItem('id_usuario') || 1; 
 
-    try {
-        const response = await fetch('http://localhost:3000/api/caja/apertura', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                id_usuario: idUsuario, // ¡Ahora sí sabe quién es!
-                monto_inicial: monto
-            })
+            if (isNaN(monto) || monto < 0) {
+                alert("Por favor, ingrese un monto válido mayor o igual a 0.");
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:3000/api/caja/apertura', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_usuario: idUsuario,
+                        monto_inicial: monto
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    
+                    // 🔑 Guardamos el ID de la caja activa
+                    localStorage.setItem('id_caja_activa', data.id_caja);
+
+                    modalApertura.classList.add('oculto');
+                    verificarEstadoCaja(); // Refresca la UI sin recargar toda la página
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al abrir caja:", error);
+                alert("Error de conexión con el servidor.");
+            }
         });
-
-        const data = await response.json();
-
-        if (data.success) {
-            alert(data.message);
             
-            // 🔑 Guardamos el ID de la caja activa
-            localStorage.setItem('id_caja_activa', data.id_caja);
-
-            modalApertura.classList.add('oculto');
-            verificarEstadoCaja(); // Refresca la UI sin recargar toda la página
-        } else {
-            alert("Error: " + data.message);
-        }
-    } catch (error) {
-        console.error("Error al abrir caja:", error);
-        alert("Error de conexión con el servidor.");
-    }
-});
-            
-   
         // Referencias para el Modal de Cierre
-const btnCerrarCajaUi = document.getElementById('btnCerrarCaja'); // Tu botón rojo de cierre
-const modalCierre = document.getElementById('modalCierre');
-const btnCerrarModalCierre = document.getElementById('btnCerrarModalCierre');
-const btnConfirmarCierre = document.getElementById('btnConfirmarCierre');
-const inputMontoCierre = document.getElementById('inputMontoCierre');
+        const btnCerrarCajaUi = document.getElementById('btnCerrarCaja'); 
+        const modalCierre = document.getElementById('modalCierre');
+        const btnCerrarModalCierre = document.getElementById('btnCerrarModalCierre');
+        const btnConfirmarCierre = document.getElementById('btnConfirmarCierre');
+        const inputMontoCierre = document.getElementById('inputMontoCierre');
 
-// 1. Abrir modal de cierre al hacer clic en el botón rojo
-btnCerrarCajaUi.addEventListener('click', () => {
-    modalCierre.classList.remove('oculto');
-    inputMontoCierre.value = '';
-    inputMontoCierre.focus();
-});
-
-// 2. Cerrar con la X
-btnCerrarModalCierre.addEventListener('click', () => {
-    modalCierre.classList.add('oculto');
-});
-
-// 3. Enviar cierre al backend
-btnConfirmarCierre.addEventListener('click', async () => {
-    const montoReal = parseFloat(inputMontoCierre.value);
-    const idCajaActiva = localStorage.getItem('id_caja_activa');
-
-    if (isNaN(montoReal) || montoReal < 0) {
-        alert("Ingrese un monto real válido.");
-        return;
-    }
-
-    try {
-        const response = await fetch(`http://localhost:3000/api/caja/cierre/${idCajaActiva}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ monto_final_real: montoReal })
+        // 1. Abrir modal de cierre al hacer clic en el botón rojo
+        btnCerrarCajaUi.addEventListener('click', () => {
+            modalCierre.classList.remove('oculto');
+            inputMontoCierre.value = '';
+            inputMontoCierre.focus();
         });
 
-        const data = await response.json();
-
-        if (data.success) {
-            alert(data.message);
-            localStorage.removeItem('id_caja_activa'); // Limpiamos el turno
+        // 2. Cerrar con la X
+        btnCerrarModalCierre.addEventListener('click', () => {
             modalCierre.classList.add('oculto');
-            location.reload(); // Recarga para volver a poner el semáforo en rojo
-        } else {
-            alert("Error: " + data.message);
-        }
-    } catch (error) {
-        console.error("Error al cerrar caja:", error);
-        alert("Error de conexión con el servidor.");
-    }
-});
-    </script> -->
-    
+        });
+
+        // 3. Enviar cierre al backend
+        btnConfirmarCierre.addEventListener('click', async () => {
+            const montoReal = parseFloat(inputMontoCierre.value);
+            const idCajaActiva = localStorage.getItem('id_caja_activa');
+
+            if (isNaN(montoReal) || montoReal < 0) {
+                alert("Ingrese un monto real válido.");
+                return;
+            }
+
+            try {
+                const response = await fetch(`http://localhost:3000/api/caja/cierre/${idCajaActiva}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ monto_final_real: montoReal })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    localStorage.removeItem('id_caja_activa'); // Limpiamos el turno
+                    modalCierre.classList.add('oculto');
+                    location.reload(); // Recarga para volver a poner el semáforo en rojo
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al cerrar caja:", error);
+                alert("Error de conexión con el servidor.");
+            }
+        });
+    </script>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="menu.js"></script>
