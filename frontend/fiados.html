@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Control de Fiados</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Forzar que la barra de navegación superior tenga su color verde y letras visibles */
+        .navbar, .navbar-custom { background-color: #006D5B !important; }
+        .navbar-brand, .nav-link, .navbar-text { color: #ffffff !important; }
+    </style>
+    <style>
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .card-custom { border: none; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    </style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div id="menu-container"></div>
+    
+    <div class="container mt-4 mb-5">
+        <h2 class="fw-bold text-dark mb-4">Control de Créditos y Fiados</h2>
+
+        <div class="card card-custom p-4">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Cliente</th>
+                            <th>Teléfono</th>
+                            <th class="text-danger fw-bold">Deuda Total</th>
+                            <th class="text-center">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaFiados">
+                        <tr><td colspan="4" class="text-center text-muted py-4">Cargando deudores...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+<!-- MODAL MULTIPAGO PARA ABONAR FIADOS -->
+    <div class="modal fade" id="modalAbono" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 rounded-4 shadow">
+                <div class="modal-header border-0 bg-success text-white rounded-top-4">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-hand-holding-usd me-2"></i>Registrar Pago de Deuda</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <input type="hidden" id="abonoIdCliente">
+                    
+                    <div class="d-flex justify-content-between mb-3">
+                        <span class="text-muted">Cliente: <strong id="abonoNombreCliente" class="text-dark">---</strong></span>
+                        <span class="text-muted">Deuda Total: <strong class="text-danger">S/ <span id="abonoDeudaActual">0.00</span></strong></span>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Monto a Abonar (S/):</label>
+                        <input type="number" id="inputMontoAbono" class="form-control form-control-lg text-success fw-bold" placeholder="0.00" step="0.10" oninput="sincronizarAbonoMixto()">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-secondary">Método de Pago:</label>
+                        <select class="form-select form-select-lg border-2 shadow-sm" id="metodoPagoAbono" onchange="verificarMetodoPagoAbono()">
+                            <option value="Efectivo">💵 Contado / Efectivo</option>
+                            <option value="Yape">📱 Yape</option>
+                            <option value="Plin">📱 Plin</option>
+                            <option value="Tarjeta">💳 Tarjeta de Crédito / Débito</option>
+                            <option value="Mixto">🔄 Pago Mixto (Varias formas)</option>
+                        </select>
+                    </div>
+
+                    <!-- DESGLOSE DE PAGO MIXTO -->
+                    <div id="seccionMixtoAbono" class="card border-0 bg-light p-3 mb-3" style="display: none;">
+                        <label class="form-label fw-bold text-dark mb-2">Desglose de Pago:</label>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #198754; width: 100px;">Efectivo</span>
+                            <input type="number" step="0.01" class="form-control" id="abonoEfectivo" value="0">
+                        </div>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #6f42c1; width: 100px;">Yape</span>
+                            <input type="number" step="0.01" class="form-control" id="abonoYape" value="0">
+                        </div>
+                        <div class="input-group mb-2">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #0dcaf0; width: 100px;">Plin</span>
+                            <input type="number" step="0.01" class="form-control" id="abonoPlin" value="0">
+                        </div>
+                        <div class="input-group">
+                            <span class="input-group-text text-white fw-bold" style="background-color: #6c757d; width: 100px;">Tarjeta</span>
+                            <input type="number" step="0.01" class="form-control" id="abonoTarjeta" value="0">
+                        </div>
+                    </div>
+
+                    <button class="btn btn-success w-100 fw-bold py-3 fs-5" onclick="guardarAbono()">CONFIRMAR PAGO ✔️</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script>
+  <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            cargarFiados();
+        });
+
+        async function cargarFiados() {
+            try {
+                const res = await fetch('/api/fiados');
+                const data = await res.json();
+
+                if (data.success) {
+                    const tbody = document.getElementById('tablaFiados');
+                    tbody.innerHTML = '';
+
+                    if (data.clientes.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-success fw-bold py-4">No hay clientes con deudas pendientes. ¡Todo cobrado!</td></tr>`;
+                        return;
+                    }
+
+                    data.clientes.forEach(c => {
+                        tbody.innerHTML += `
+                            <tr>
+                                <td class="fw-bold text-dark">${c.nombre}</td>
+                                <td class="text-muted">${c.telefono || '-'}</td>
+                                <td class="text-danger fw-bold fs-5">S/ ${Number(c.deuda_acumulada).toFixed(2)}</td>
+                                <td class="text-center">
+                                    <button class="btn btn-sm btn-success fw-bold px-3" onclick="abrirModalAbono(${c.id_cliente}, '${c.nombre}', ${c.deuda_acumulada})">
+                                        Cobrar
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                }
+            } catch (error) {
+                console.error("Error al cargar fiados:", error);
+            }
+        }
+
+        function abrirModalAbono(id, nombre, deuda) {
+            document.getElementById('abonoIdCliente').value = id;
+            document.getElementById('abonoNombreCliente').textContent = nombre;
+            document.getElementById('abonoDeudaActual').textContent = Number(deuda).toFixed(2);
+            document.getElementById('inputMontoAbono').value = '';
+            
+            // Resetear método de pago a efectivo y ocultar mixto por defecto
+            document.getElementById('metodoPagoAbono').value = 'Efectivo';
+            document.getElementById('seccionMixtoAbono').style.display = 'none';
+
+            const modal = new bootstrap.Modal(document.getElementById('modalAbono'));
+            modal.show();
+        }
+
+        function verificarMetodoPagoAbono() {
+            const metodo = document.getElementById('metodoPagoAbono').value;
+            const seccionMixto = document.getElementById('seccionMixtoAbono');
+            
+            if (metodo === 'Mixto') {
+                seccionMixto.style.display = 'block';
+                const montoAbono = parseFloat(document.getElementById('inputMontoAbono').value) || 0;
+                document.getElementById('abonoEfectivo').value = montoAbono.toFixed(2);
+                document.getElementById('abonoYape').value = '0.00';
+                document.getElementById('abonoPlin').value = '0.00';
+                document.getElementById('abonoTarjeta').value = '0.00';
+            } else {
+                seccionMixto.style.display = 'none';
+            }
+        }
+
+     async function guardarAbono() {
+            const idCliente = document.getElementById('abonoIdCliente').value;
+            const montoAbono = parseFloat(document.getElementById('inputMontoAbono').value);
+            const metodoPago = document.getElementById('metodoPagoAbono').value;
+            const deudaActual = parseFloat(document.getElementById('abonoDeudaActual').textContent);
+            
+            const idCajaActiva = localStorage.getItem('id_caja_activa') || 1; 
+            const idUsuarioActivo = localStorage.getItem('id_usuario') || 1;
+
+            if (!montoAbono || montoAbono <= 0) {
+                alert("Ingresa un monto válido para abonar.");
+                return;
+            }
+
+            if (montoAbono > deudaActual) {
+                alert("El abono no puede ser mayor a la deuda actual.");
+                return;
+            }
+
+            let pEfectivo = 0, pYape = 0, pPlin = 0, pTarjeta = 0;
+
+            if (metodoPago === 'Mixto') {
+                pEfectivo = parseFloat(document.getElementById('abonoEfectivo').value) || 0;
+                pYape = parseFloat(document.getElementById('abonoYape').value) || 0;
+                pPlin = parseFloat(document.getElementById('abonoPlin').value) || 0;
+                pTarjeta = parseFloat(document.getElementById('abonoTarjeta').value) || 0;
+
+                const suma = pEfectivo + pYape + pPlin + pTarjeta;
+                if (Math.abs(suma - montoAbono) > 0.05) {
+                    return alert(`El desglose mixto (S/ ${suma.toFixed(2)}) no coincide con el abono total (S/ ${montoAbono.toFixed(2)}).`);
+                }
+            } else {
+                if (metodoPago === 'Efectivo') pEfectivo = montoAbono;
+                else if (metodoPago === 'Yape') pYape = montoAbono;
+                else if (metodoPago === 'Plin') pPlin = montoAbono;
+                else if (metodoPago === 'Tarjeta') pTarjeta = montoAbono;
+            }
+
+            try {
+                const res = await fetch('/api/fiados/abonar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        id_cliente: idCliente, 
+                        monto_total: montoAbono, 
+                        pago_efectivo: pEfectivo, 
+                        pago_yape: pYape, 
+                        pago_plin: pPlin, 
+                        pago_tarjeta: pTarjeta,
+                        id_caja: idCajaActiva,    
+                        id_usuario: idUsuarioActivo 
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                    alert("¡Abono registrado con éxito en Caja!");
+                    const modalEl = document.getElementById('modalAbono');
+                    bootstrap.Modal.getInstance(modalEl).hide();
+                    cargarFiados(); 
+                } else {
+                    alert("Error: " + data.message);
+                }
+            } catch (error) {
+                console.error("Error al abonar, activa turno de caja:", error);
+                alert("Error de conexión con el servidor.");
+            }
+        }
+
+
+    </script> 
+   
+</body>
+</html>

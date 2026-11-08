@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Detalle de la Mesa - ERP Licorería</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -11,6 +11,7 @@
         .btn-teal { background-color: #006D5B; color: white; }
         .btn-teal:hover { background-color: #005043; color: white; }
     </style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container mt-4">
@@ -150,7 +151,7 @@
         // 1. CARGAR LO QUE YA SE TOMARON ANTES
         async function cargarHistorialMesa() {
             try {
-                const res = await fetch(`http://localhost:3000/api/cuentas/${idCuenta}/detalle`);
+                const res = await fetch(`/api/cuentas/${idCuenta}/detalle`);
                 const data = await res.json();
                 
                 if (data.success && data.detalles.length > 0) {
@@ -172,7 +173,7 @@
                 return;
             }
             try {
-                const res = await fetch(`http://localhost:3000/api/productos/buscar?q=${q}`);
+                const res = await fetch(`/api/productos/buscar?q=${q}`);
                 const data = await res.json();
                 cajaResultados.innerHTML = '';
 
@@ -288,7 +289,7 @@
 
             try {
                 
-                const response = await fetch('http://localhost:3000/api/cuentas/guardar', {
+                const response = await fetch('/api/cuentas/guardar', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -357,7 +358,7 @@ let totalACobrar = 0;
             }
 
             try {
-                const response = await fetch('http://localhost:3000/api/cuentas/cobrar', {
+                const response = await fetch('/api/cuentas/cobrar', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -448,7 +449,7 @@ let totalACobrar = 0;
             }
 
             try {
-                const response = await fetch('http://localhost:3000/api/cuentas/cobrar', {
+                const response = await fetch('/api/cuentas/cobrar', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

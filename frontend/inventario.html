@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Inventario</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -41,6 +41,7 @@
             border-bottom: 4px solid #D4AF37;
         }
     </style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
@@ -271,13 +272,19 @@
     </div>
 
     <script>
-        // --- SEGURIDAD INVENTARIO ---
-       const rolUsuario = localStorage.getItem('rol');
+        // --- SEGURIDAD INVENTARIO (CORREGIDA Y FLEXIBLE) ---
+        const rolCrudo = localStorage.getItem('rol') || localStorage.getItem('tipo_usuario') || '1';
+        const rolUsuario = rolCrudo.toLowerCase().trim();
         
-        if (rolUsuario !== 'Administrador') {
-            // Si es cajero, le ocultamos los botones de arriba
-            document.getElementById('btnNuevoProducto').classList.add('solo-admin');
-            document.getElementById('btnNuevaCompra').classList.add('solo-admin');
+        // Verificamos si es administrador (sea por texto 'administrador', 'admin', o por número '1')
+        const esAdmin = rolUsuario.includes('admin') || rolUsuario === '1' || rolUsuario.includes('gerente');
+        
+        if (!esAdmin) {
+            // Si es un cajero real, ocultamos los botones de gestión de arriba
+            const btnProd = document.getElementById('btnNuevoProducto');
+            const btnComp = document.getElementById('btnNuevaCompra');
+            if (btnProd) btnProd.classList.add('solo-admin');
+            if (btnComp) btnComp.classList.add('solo-admin');
         }
         // 1. VARIABLES GLOBALES
         const cuerpoInventario = document.getElementById('cuerpoInventario');
@@ -290,7 +297,7 @@
         // 2. CARGAR INVENTARIO AL INICIAR
         async function cargarInventario() {
             try {
-                const res = await fetch('http://localhost:3000/api/inventario');
+                const res = await fetch('/api/inventario');
                 const data = await res.json();
 
                 if (data.success) {
@@ -305,8 +312,8 @@
             }
         }
 
-        // 3. DIBUJAR LA TABLA Y EL SEMÁFORO
-       function renderizarTabla(datos) {
+ // 3. DIBUJAR LA TABLA Y EL SEMÁFORO
+        function renderizarTabla(datos) {
             cuerpoInventario.innerHTML = '';
             
             if (datos.length === 0) {
@@ -320,9 +327,9 @@
                 else if (prod.estado_stock === 'Bajo') badgeClass = 'bg-warning text-dark';
                 else badgeClass = 'bg-success';
 
-                // Lógica de seguridad para celdas
-                const celdaCosto = rolUsuario === '1' ? `<td class="text-center text-muted">S/ ${parseFloat(prod.precio_costo_unitario).toFixed(2)}</td>` : '';
-                const celdaAcciones = rolUsuario === '1' ? `
+                // Usamos 'esAdmin' para mostrar el costo y las acciones de edición/ajuste
+                const celdaCosto = esAdmin ? `<td class="text-center text-muted">S/ ${parseFloat(prod.precio_costo_unitario || 0).toFixed(2)}</td>` : '';
+                const celdaAcciones = esAdmin ? `
                     <td class="text-center">
                         <button class="btn btn-sm btn-outline-primary mb-1" onclick="abrirModalEditar(${prod.id_producto})" title="Editar">✏️</button>
                         <button class="btn btn-sm btn-outline-secondary mb-1" onclick="abrirModalAjuste(${prod.id_producto}, '${prod.nombre}')" title="Ajustar Stock">⚖️</button>
@@ -334,7 +341,7 @@
                         <td class="fw-bold">${prod.nombre}</td>
                         <td>${prod.categoria}</td>
                         ${celdaCosto}
-                        <td class="text-center fw-bold">S/ ${parseFloat(prod.precio_venta_unitario).toFixed(2)}</td>
+                        <td class="text-center fw-bold">S/ ${parseFloat(prod.precio_venta_unitario || 0).toFixed(2)}</td>
                         <td class="text-center fs-5 fw-bold ${prod.stock_unidades <= prod.stock_minimo ? 'text-danger' : ''}">${prod.stock_unidades}</td>
                         <td class="text-center">
                             <span class="badge badge-stock ${badgeClass}">${prod.estado_stock}</span>
@@ -344,13 +351,14 @@
                 `;
             });
 
-            // Si es cajero, también ocultamos las cabeceras de la tabla
-            if (rolUsuario !== '1') {
-                document.getElementById('thCosto').style.display = 'none';
-                document.getElementById('thAccion').style.display = 'none';
+            // Ocultar cabeceras de Costo y Acción si no es admin
+            if (!esAdmin) {
+                const thC = document.getElementById('thCosto');
+                const thA = document.getElementById('thAccion');
+                if(thC) thC.style.display = 'none';
+                if(thA) thA.style.display = 'none';
             }
         }
-
 
 
 
@@ -386,7 +394,7 @@
             if (motivo === "") return alert("Debe ingresar un motivo para el ajuste.");
 
             try {
-                const response = await fetch('http://localhost:3000/api/inventario/ajuste', {
+                const response = await fetch('/api/inventario/ajuste', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -425,7 +433,7 @@
             
             // Cargar proveedores desde la BD
             try {
-                const res = await fetch('http://localhost:3000/api/proveedores');
+                const res = await fetch('/api/proveedores');
                 const data = await res.json();
                 if (data.success) {
                     const select = document.getElementById('selectProveedor');
@@ -544,7 +552,7 @@
             btn.disabled = true; btn.textContent = "⏳ Guardando...";
 
             try {
-                const response = await fetch('http://localhost:3000/api/compras/registrar', {
+                const response = await fetch('/api/compras/registrar', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -575,7 +583,7 @@
         // Cargar Categorías
         async function cargarCategoriasSelect() {
             try {
-                const res = await fetch('http://localhost:3000/api/categorias');
+                const res = await fetch('/api/categorias');
                 const data = await res.json();
                 if (data.success) {
                     const select = document.getElementById('prodCategoria');
@@ -665,7 +673,7 @@
 
             if(!payload.nombre || isNaN(payload.precio_venta)) return alert("El nombre y el precio de venta son obligatorios.");
 
-            const url = id ? `http://localhost:3000/api/productos/editar/${id}` : `http://localhost:3000/api/productos/nuevo`;
+            const url = id ? `/api/productos/editar/${id}` : `/api/productos/nuevo`;
             const metodo = id ? 'PUT' : 'POST';
 
             try {

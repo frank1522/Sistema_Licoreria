@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Control de Caja</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -85,6 +85,7 @@
         .btn-abrir-confirmar:hover { background: #005043; color: #ffffff; }
     
     </style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
@@ -150,10 +151,10 @@
                             <td>📉 Egresos (Gastos físicos):</td>
                             <td class="text-end fw-bold text-danger">- S/ <span id="montoEgresos">0.00</span></td>
                         </tr>
-                        <tr class="border-top bg-light">
+                            <tr class="border-top bg-light">
                             <td class="fw-bold pt-3 fs-5">💵 Efectivo Esperado en Caja:</td>
-                            <td class="text-end fw-bold text-primary pt-3 fs-4">S/ <span id="montoNetoEfectivo">0.00</span></td>
-                        </tr>
+                            <td class="text-end fw-bold text-primary pt-3 fs-4" style="white-space: nowrap;">S/ <span id="montoNetoEfectivo">0.00</span></td>
+                            </tr>
 
                         <!-- SECCIÓN 2: PAGOS DIGITALES (Lo que fue a la cuenta bancaria) -->
                         <tr>
@@ -305,7 +306,7 @@
             if (!idCajaActiva) return;
 
             try {
-                const res = await fetch(`http://localhost:3000/api/caja/arqueo/${idCajaActiva}`);
+                const res = await fetch(`/api/caja/arqueo/${idCajaActiva}`);
                 const data = await res.json();
 
                 if (data.success) {
@@ -346,10 +347,13 @@
 
         async function verificarEstadoCaja() {
             try {
-                const res = await fetch('http://localhost:3000/api/caja/estado');
+                const res = await fetch('/api/caja/estado');
                 const data = await res.json();
 
-                if (data.success && data.cajaAbierta) {
+               if (data.success && data.cajaAbierta) {
+                    // 🌟 SOLUCIÓN DEFINITIVA: Rescatamos el ID y lo grabamos en la memoria a la fuerza
+                    localStorage.setItem('id_caja_activa', data.id_caja);
+
                     badgeEstado.textContent = 'CAJA ABIERTA';
                     badgeEstado.className = 'badge badge-abierta fs-5 px-4 py-2';
                     
@@ -357,9 +361,10 @@
                     btnMovimiento.disabled = false;
                     btnCerrarCaja.disabled = false;
 
-                    // 🔑 LLAMADA 1: Apenas abre la página y detecta caja abierta, actualiza los números
                     actualizarArqueoEnVivo();
                 } else {
+                    localStorage.removeItem('id_caja_activa');
+
                     badgeEstado.textContent = 'CAJA CERRADA';
                     badgeEstado.className = 'badge badge-cerrada fs-5 px-4 py-2';
                     
@@ -371,7 +376,6 @@
                 console.error("Error al consultar caja:", error);
             }
         }
-
         // Ejecutar al cargar
         verificarEstadoCaja();
 
@@ -409,7 +413,7 @@
             }
 
             try {
-                const response = await fetch('http://localhost:3000/api/caja/movimiento', {
+                const response = await fetch('/api/caja/movimiento', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id_caja: idCajaActiva, tipo, monto, motivo })
@@ -445,7 +449,7 @@
             }
 
             try {
-                const response = await fetch('http://localhost:3000/api/caja/apertura', {
+                const response = await fetch('/api/caja/apertura', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -503,7 +507,7 @@
             }
 
             try {
-                const response = await fetch(`http://localhost:3000/api/caja/cierre/${idCajaActiva}`, {
+                const response = await fetch(`/api/caja/cierre/${idCajaActiva}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ monto_final_real: montoReal })

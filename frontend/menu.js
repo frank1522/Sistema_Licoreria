@@ -20,14 +20,16 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             <div class="offcanvas-body">
                 <ul class="nav flex-column fs-5 mt-3">
+                       <li class="nav-item mb-3"><a class="nav-link text-white" href="index.html">🔴 Dashboard</a></li>
                     <li class="nav-item mb-3"><a class="nav-link text-white" href="venta.html">🛒 Punto de Venta</a></li>
                     <li class="nav-item mb-3"><a class="nav-link text-white" href="caja.html">💰 Control de Caja</a></li>
                     
                     <!-- ¡AQUÍ ESTÁ EL CAMBIO! Le quitamos el admin-only al Inventario -->
                     <li class="nav-item mb-3"><a class="nav-link text-white" href="inventario.html">📦 Gestión de Inventario</a></li>
                     
-                    <li class="nav-item mb-3 admin-only"><a class="nav-link text-white" href="reportes.html">📊 Reportes y Movimientos</a></li>
+                    <li class="nav-item mb-3 admin-only"><a class="nav-link text-white" href="reporte.html">📊 Reportes y Movimientos</a></li>
                     <li class="nav-item mb-3 admin-only"><a class="nav-link text-white" href="cuentas.html">📀 Gestión de mesas</a></li>
+                    <li class="nav-item mb-3 admin-only"><a class="nav-link text-white" href="fiados.html">💳 Clientes con Fiado</a></li>
                     <li class="nav-item mb-3 admin-only"><a class="nav-link text-white" href="configuracion.html">⚙️ Configuración</a></li>
                     
                     <hr class="border-light mt-4 mb-4">

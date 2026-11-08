@@ -47,7 +47,67 @@ app.post('/api/auth/login', (req, res) => {
         });
     }); 
 });
+// ==========================================
+// RUTA PARA EL DASHBOARD PRINCIPAL
+// ==========================================
+app.get('/api/dashboard', async (req, res) => {
+    try {
+        // 1. Sumar TODAS las ventas y pagos exactos del día de HOY
+        const sqlVentas = `
+            SELECT 
+                IFNULL(SUM(pago_efectivo), 0) AS efectivo,
+                IFNULL(SUM(pago_yape), 0) AS yape,
+                IFNULL(SUM(pago_plin), 0) AS plin,
+                IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
+            FROM ventas 
+            WHERE DATE(fecha_venta) = CURDATE()
+        `;
+        const [ventas] = await db.promise().query(sqlVentas);
+        
+        const pagos = {
+            efectivo: Number(ventas[0].efectivo),
+            yape: Number(ventas[0].yape),
+            plin: Number(ventas[0].plin),
+            tarjeta: Number(ventas[0].tarjeta)
+        };
+        const ventas_hoy = pagos.efectivo + pagos.yape + pagos.plin + pagos.tarjeta;
 
+        // 2. Contar Mesas/Cuentas Activas (Se asume que la tabla es 'cuentas' y estado 'Abierta' o 'Pendiente')
+        // *Si tu tabla se llama distinto (ej. 'mesas'), solo cámbiale el nombre aquí abajo:
+        const sqlMesas = `SELECT COUNT(*) AS activas FROM cuentas WHERE estado = 'Abierta' OR estado = 'Pendiente'`;
+        const [mesas] = await db.promise().query(sqlMesas);
+        const mesas_activas = mesas[0].activas;
+
+        // 3. Verificar si hay alguna caja abierta ahorita
+        const [caja] = await db.promise().query("SELECT id_caja FROM caja WHERE estado = 'Abierta' LIMIT 1");
+        const caja_abierta = caja.length > 0;
+
+        // 4. Buscar productos que se están agotando (Stock <= 10) para la tablita de alertas
+const sqlStock = `
+    SELECT nombre, stock_unidades AS stock 
+    FROM productos 
+    WHERE stock_unidades <= stock_minimo 
+    ORDER BY stock_unidades ASC 
+    LIMIT 6
+`;
+        const [productos_criticos] = await db.promise().query(sqlStock);
+
+        // Mandamos todo el paquete armado al frontend
+        res.json({
+            success: true,
+            ventas_hoy: ventas_hoy,
+            mesas_activas: mesas_activas,
+            caja_abierta: caja_abierta,
+            pagos: pagos,
+            stock_critico_count: productos_criticos.length,
+            productos_criticos: productos_criticos
+        });
+
+    } catch (error) {
+        console.error("Error al cargar el dashboard:", error);
+        res.status(500).json({ success: false, message: "Error al cargar las estadísticas del dashboard." });
+    }
+});
 // ============================================================
 // 2. RUTAS DE CAJA (ESTADO Y APERTURA)
 // ============================================================
@@ -56,6 +116,7 @@ app.get('/api/caja/estado', (req, res) => {
         SELECT id_caja, id_usuario, fecha_apertura, monto_inicial 
         FROM caja 
         WHERE estado = 'Abierta' 
+        ORDER BY id_caja DESC
         LIMIT 1
     `;
 
@@ -63,11 +124,17 @@ app.get('/api/caja/estado', (req, res) => {
         if (err) return res.status(500).json({ success: false, message: "Error al consultar el estado de la caja." });
 
         if (results.length > 0) {
-            return res.json({ success: true, cajaAbierta: true, datosCaja: results[0] });
+            return res.json({ 
+                success: true, 
+                cajaAbierta: true, 
+                id_caja: results[0].id_caja, // 🌟 CLAVE: Lo sacamos aquí afuera para que el frontend lo lea fácil
+                datosCaja: results[0] 
+            });
         }
 
         res.json({
-            success: true, cajaAbierta: false,
+            success: true, 
+            cajaAbierta: false,
             message: "La caja del día se encuentra cerrada. Debe realizar la apertura."
         });
     });
@@ -226,37 +293,73 @@ app.get('/api/productos/buscar', (req, res) => {
 // ============================================================
 // RUTA PARA EL CIERRE DE CAJA (ARQUEO FINAL)
 // ============================================================
-app.put('/api/caja/cierre/:id_caja', (req, res) => {
+app.put('/api/caja/cierre/:id_caja', async (req, res) => {
     const { id_caja } = req.params;
     const { monto_final_real } = req.body;
 
     if (monto_final_real === undefined || monto_final_real < 0) {
-        return res.status(400).json({ 
-            success: false, 
-            message: "Por favor, ingrese un monto final real válido." 
-        });
+        return res.status(400).json({ success: false, message: "Por favor, ingrese un monto final real válido." });
     }
 
-    const sqlCerrar = `
-        UPDATE caja 
-        SET estado = 'Cerrada', monto_final_real = ?, fecha_cierre = CURRENT_TIMESTAMP 
-        WHERE id_caja = ? AND estado = 'Abierta'
-    `;
-
-    db.query(sqlCerrar, [monto_final_real, id_caja], (err, updateResult) => {
-        if (err) {
-            return res.status(500).json({ success: false, message: "Error al procesar el cierre de caja." });
-        }
-
-        if (updateResult.affectedRows === 0) {
+    try {
+        // 1. Verificar si la caja existe y traer el monto inicial
+        const [caja] = await db.promise().query("SELECT monto_inicial FROM caja WHERE id_caja = ? AND estado = 'Abierta'", [id_caja]);
+        
+        if (caja.length === 0) {
             return res.status(400).json({ success: false, message: "La caja ya estaba cerrada o no existe." });
+        }
+        
+        const montoInicial = Number(caja[0].monto_inicial || 0);
+
+        // 2. Sumar ingresos extra (de la tabla movimientos)
+        const [ingresos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Ingreso'", [id_caja]);
+        const totalIngresos = Number(ingresos[0].total);
+
+        // 3. Sumar gastos / egresos (de la tabla movimientos)
+        const [gastos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Gasto'", [id_caja]);
+        const totalGastos = Number(gastos[0].total);
+
+        // 4. Sumar TODAS las ventas cobradas en EFECTIVO
+        const [ventas] = await db.promise().query("SELECT IFNULL(SUM(pago_efectivo), 0) AS total FROM ventas WHERE id_caja = ?", [id_caja]);
+        const totalVentasEfectivo = Number(ventas[0].total);
+
+        // 5. CÁLCULO PERFECTO: Inicial + Ingresos + Ventas Efectivo - Gastos
+        const esperado = montoInicial + totalIngresos + totalVentasEfectivo - totalGastos;
+        
+        // 6. Calcular el descuadre (Real - Esperado)
+        const descuadre = Number(monto_final_real) - esperado; 
+
+        // 7. Cerrar el turno guardando los números correctos
+        const sqlCerrar = `
+            UPDATE caja 
+            SET estado = 'Cerrada', 
+                monto_final_real = ?, 
+                descuadre = ?, 
+                fecha_cierre = CURRENT_TIMESTAMP 
+            WHERE id_caja = ?
+        `;
+
+        await db.promise().query(sqlCerrar, [monto_final_real, descuadre, id_caja]);
+
+        // 8. Mensaje inteligente para la alerta del cajero
+        let mensajeExtra = "";
+        if (descuadre === 0) {
+            mensajeExtra = "¡Caja cuadrada perfectamente a cero!";
+        } else if (descuadre > 0) {
+            mensajeExtra = `Sobran S/ ${descuadre.toFixed(2)} en gaveta.`;
+        } else {
+            mensajeExtra = `Faltan S/ ${Math.abs(descuadre).toFixed(2)} en gaveta.`;
         }
 
         res.json({
             success: true,
-            message: "¡Caja cerrada exitosamente! Turno finalizado."
+            message: `Turno finalizado. ${mensajeExtra}`
         });
-    });
+
+    } catch (err) {
+        console.error("Error al cerrar caja:", err);
+        res.status(500).json({ success: false, message: "Error al procesar el cierre de caja." });
+    }
 });
 // ============================================================
 // MÓDULO POS: PROCESAR VENTA (MULTIPAGO Y DESCUENTO DE STOCK CORREGIDO)
@@ -313,7 +416,7 @@ app.post('/api/ventas/procesar', async (req, res) => {
 });
 
 // ============================================================
-// 5. CATÁLOGO DE PRODUCTOS (Para el Punto de Venta)
+//  CATÁLOGO DE PRODUCTOS (Para el Punto de Venta)
 // ============================================================
 app.get('/api/productos', (req, res) => {
     const sql = `
@@ -329,7 +432,7 @@ app.get('/api/productos', (req, res) => {
     });
 });
 // ============================================================
-// 6. MÓDULO INVENTARIO: LISTADO PRO CON SEMÁFORO
+//  MÓDULO INVENTARIO: LISTADO PRO CON SEMÁFORO
 // ============================================================
 app.get('/api/inventario', async (req, res) => {
     try {
@@ -355,7 +458,7 @@ app.get('/api/inventario', async (req, res) => {
     }
 });
 // ============================================================
-// 7. MÓDULO INVENTARIO: REGISTRAR COMPRA AL PROVEEDOR
+// MÓDULO INVENTARIO: REGISTRAR COMPRA AL PROVEEDOR
 // ============================================================
 app.post('/api/compras/registrar', async (req, res) => {
     const { id_proveedor, id_usuario, numero_comprobante, total, detalles } = req.body;
@@ -401,7 +504,7 @@ app.post('/api/compras/registrar', async (req, res) => {
 });
 
 // ============================================================
-// 8. MÓDULO INVENTARIO: AJUSTE DE STOCK FÍSICO (Roturas / Mermas)
+// MÓDULO INVENTARIO: AJUSTE DE STOCK FÍSICO (Roturas / Mermas)
 // ============================================================
 app.post('/api/inventario/ajuste', async (req, res) => {
     const { id_producto, id_usuario, tipo_ajuste, cantidad, motivo } = req.body;
@@ -437,7 +540,7 @@ app.post('/api/inventario/ajuste', async (req, res) => {
     }
 });
 // ============================================================
-// 9. MÓDULO COMPRAS: CARGAR PROVEEDORES
+// MÓDULO COMPRAS: CARGAR PROVEEDORES
 // ============================================================
 app.get('/api/proveedores', async (req, res) => {
     try {
@@ -448,7 +551,7 @@ app.get('/api/proveedores', async (req, res) => {
     }
 });
 // ============================================================
-// 10. MÓDULO INVENTARIO: CARGAR CATEGORÍAS
+// MÓDULO INVENTARIO: CARGAR CATEGORÍAS
 // ============================================================
 app.get('/api/categorias', async (req, res) => {
     try {
@@ -460,7 +563,7 @@ app.get('/api/categorias', async (req, res) => {
 });
 
 // ============================================================
-// 11. MÓDULO INVENTARIO: CREAR NUEVO PRODUCTO
+//  MÓDULO INVENTARIO: CREAR NUEVO PRODUCTO
 // ============================================================
 app.post('/api/productos/nuevo', async (req, res) => {
     const { codigo_barras, nombre, id_categoria, precio_costo, precio_venta, stock_inicial, stock_minimo, precio_sixpack, precio_caja, unidades_caja } = req.body;
@@ -478,7 +581,7 @@ app.post('/api/productos/nuevo', async (req, res) => {
 });
 
 // ============================================================
-// 12. MÓDULO INVENTARIO: EDITAR PRODUCTO EXISTENTE
+//  MÓDULO INVENTARIO: EDITAR PRODUCTO EXISTENTE
 // ============================================================
 app.put('/api/productos/editar/:id', async (req, res) => {
     const { id } = req.params;
@@ -497,7 +600,7 @@ app.put('/api/productos/editar/:id', async (req, res) => {
     }
 });
 // ============================================================
-// 13. MÓDULO CONFIG: CRUD CATEGORÍAS
+//  MÓDULO CONFIG: CRUD CATEGORÍAS
 // ============================================================
 app.post('/api/categorias/nuevo', async (req, res) => {
     const { nombre } = req.body;
@@ -523,7 +626,7 @@ app.put('/api/categorias/editar/:id', async (req, res) => {
 });
 
 // ============================================================
-// 14. MÓDULO CONFIG: CRUD PROVEEDORES
+//  MÓDULO CONFIG: CRUD PROVEEDORES
 // ============================================================
 app.post('/api/proveedores/nuevo', async (req, res) => {
     const { razon_social, ruc_dni, telefono } = req.body;
@@ -547,19 +650,214 @@ app.put('/api/proveedores/editar/:id', async (req, res) => {
         res.status(500).json({ success: false, message: "Error al actualizar." });
     }
 });
+// ==========================================
+// RUTA PARA REPORTES AVANZADOS (RESUMIDO Y DETALLADO)
+// ==========================================
+app.get('/api/reportes/avanzado', async (req, res) => {
+    const { inicio, fin, cliente } = req.query;
 
-// ============================================================
-// 15. MÓDULO CONFIG: CRUD CLIENTES
-// ============================================================
-app.get('/api/clientes', async (req, res) => {
     try {
-        const [clientes] = await db.promise().query("SELECT * FROM clientes");
-        res.json({ success: true, clientes });
+        // Base de la consulta filtrando por rango de fechas
+        let sql = `SELECT * FROM ventas WHERE DATE(fecha_venta) BETWEEN ? AND ?`;
+        let params = [inicio, fin];
+
+        // Si el usuario escribió un cliente o mesa, agregamos el filtro dinámicamente
+        if (cliente && cliente.trim() !== '') {
+            sql += ` AND cliente_mesa LIKE ?`;
+            params.push(`%${cliente}%`);
+        }
+
+        sql += ` ORDER BY fecha_venta DESC`;
+
+        const [ventas] = await db.promise().query(sql, params);
+
+        // Calcular los totales resumidos en el backend
+        let totalEfectivo = 0;
+        let totalDigital = 0;
+
+        ventas.forEach(v => {
+            totalEfectivo += Number(v.pago_efectivo || 0);
+            totalDigital += Number(v.pago_yape || 0) + Number(v.pago_plin || 0) + Number(v.pago_tarjeta || 0);
+        });
+
+        res.json({
+            success: true,
+            totales: {
+                efectivo: totalEfectivo,
+                digital: totalDigital,
+                general: totalEfectivo + totalDigital
+            },
+            ventas: ventas
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar clientes." });
+        console.error("Error al generar reporte avanzado:", error);
+        res.status(500).json({ success: false, message: "Error al generar el reporte" });
+    }
+});
+app.get('/api/ventas/ticket/:id_venta', async (req, res) => {
+    const { id_venta } = req.params;
+
+    try {
+        const sqlVenta = `SELECT * FROM ventas WHERE id_venta = ?`;
+        const [venta] = await db.promise().query(sqlVenta, [id_venta]);
+
+        if (venta.length === 0) {
+            return res.status(404).json({ success: false, message: "Venta no encontrada" });
+        }
+
+        // 🌟 JALANDO TUS COLUMNAS EXACTAS DE LA FOTO
+        const sqlDetalle = `
+            SELECT dv.cantidad, dv.tipo_empaque, dv.precio_unitario, dv.subtotal, p.nombre AS producto_nombre 
+            FROM detalle_ventas dv
+            JOIN productos p ON dv.id_producto = p.id_producto
+            WHERE dv.id_venta = ?
+        `;
+        const [detalles] = await db.promise().query(sqlDetalle, [id_venta]);
+
+        res.json({
+            success: true,
+            venta: venta[0],
+            detalles: detalles
+        });
+
+    } catch (error) {
+        console.error("Error al generar ticket:", error);
+        res.status(500).json({ success: false, message: "Error del servidor al generar ticket" });
+    }
+});
+// 1. Listar clientes que deben dinero
+app.get('/api/fiados', async (req, res) => {
+    try {
+        const sql = `SELECT id_cliente, nombre, telefono, deuda_acumulada FROM clientes WHERE deuda_acumulada > 0 ORDER BY deuda_acumulada DESC`;
+        const [clientes] = await db.promise().query(sql);
+        res.json({ success: true, clientes: clientes });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Error al cargar deudores." });
     }
 });
 
+// 2. Registrar el pago de una deuda
+app.post('/api/fiados/abonar', async (req, res) => {
+    const { id_cliente, monto_total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, id_caja, id_usuario } = req.body;
+
+    if (!id_caja) {
+        return res.status(400).json({ success: false, message: "No se encontró un turno de caja activo para registrar el abono." });
+    }
+
+    try {
+        await db.promise().query('BEGIN');
+
+        // 1. Restar la deuda al cliente
+        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada - ? WHERE id_cliente = ?`;
+        await db.promise().query(sqlCliente, [monto_total, id_cliente]);
+
+        // 2. Registrar el ingreso en la tabla ventas usando la caja y usuario reales
+        const sqlIngreso = `
+            INSERT INTO ventas (
+                numero_comprobante, id_caja, id_usuario, id_cliente, 
+                fecha_venta, total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, monto_recibido, vuelto
+            ) 
+            VALUES (CONCAT('ABONO-', FLOOR(RAND() * 90000 + 10000)), ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, 0.00)
+        `;
+        
+        await db.promise().query(sqlIngreso, [
+            id_caja, 
+            id_usuario || 1, 
+            id_cliente, 
+            monto_total, 
+            pago_efectivo, 
+            pago_yape, 
+            pago_plin, 
+            pago_tarjeta, 
+            monto_total
+        ]);
+
+        await db.promise().query('COMMIT');
+        res.json({ success: true, message: "Abono guardado exitosamente." });
+
+    } catch (error) {
+        await db.promise().query('ROLLBACK');
+        console.error("Error al registrar abono:", error);
+        res.status(500).json({ success: false, message: "Error al guardar el abono en el servidor." });
+    }
+});
+
+
+// 2. Registrar el pago parcial o total de una deuda
+app.post('/api/fiados/abonar', async (req, res) => {
+    const { id_cliente, monto, metodo } = req.body;
+
+    try {
+        await db.promise().query('BEGIN');
+
+        // Restar la deuda al cliente
+        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada - ? WHERE id_cliente = ?`;
+        await db.promise().query(sqlCliente, [monto, id_cliente]);
+
+        // Aquí puedes inyectar ese abono directo a tu tabla de ventas como un ingreso de caja
+        // para que sume a las ganancias del día en tu Dashboard
+        let pago_efectivo = 0, pago_yape = 0, pago_plin = 0;
+        if (metodo === 'efectivo') pago_efectivo = monto;
+        if (metodo === 'yape') pago_yape = monto;
+        if (metodo === 'plin') pago_plin = monto;
+
+        const sqlIngreso = `
+            INSERT INTO ventas (fecha_venta, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, cliente_mesa) 
+            VALUES (NOW(), ?, ?, ?, 0, 'ABONO DE DEUDA - Cliente ID ' + ?)
+        `;
+        await db.promise().query(sqlIngreso, [pago_efectivo, pago_yape, pago_plin, id_cliente]);
+
+        await db.promise().query('COMMIT');
+        res.json({ success: true, message: "Abono guardado." });
+
+    } catch (error) {
+        await db.promise().query('ROLLBACK');
+        console.error("Error al registrar abono:", error);
+        res.status(500).json({ success: false, message: "Error al guardar el abono." });
+    }
+});
+// ==========================================
+// RUTA PARA PASAR UNA CUENTA A FIADO
+// ==========================================
+app.post('/api/cuentas/pasar-a-fiado', async (req, res) => {
+    const { id_cuenta, id_cliente, monto_total } = req.body;
+
+    // Validación por si acaso llega vacío
+    if (!id_cliente || !monto_total || monto_total <= 0) {
+        return res.status(400).json({ success: false, message: "Datos incompletos o monto en cero para fiar." });
+    }
+
+    try {
+        await db.promise().query('BEGIN');
+
+        // 1. Cambiar el estado de la cuenta a 'Fiado' o cerrarla
+        const sqlCuenta = `UPDATE cuentas SET estado = 'Fiado' WHERE id_cuenta = ?`;
+        await db.promise().query(sqlCuenta, [id_cuenta]);
+
+        // 2. Sumar la deuda al cliente en la tabla clientes
+        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada + ? WHERE id_cliente = ?`;
+        await db.promise().query(sqlCliente, [monto_total, id_cliente]);
+
+        await db.promise().query('COMMIT');
+        res.json({ success: true, message: "Cuenta pasada a crédito exitosamente." });
+
+    } catch (error) {
+        await db.promise().query('ROLLBACK');
+        console.error("Error al pasar a fiado:", error);
+        res.status(500).json({ success: false, message: "Error al registrar el fiado en el servidor." });
+    }
+});
+app.get('/api/clientes', (req, res) => {
+    const sql = "SELECT id_cliente, nombre FROM clientes ORDER BY nombre ASC";
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("Error al obtener clientes:", err);
+            return res.status(500).json({ success: false, message: "Error al obtener clientes" });
+        }
+        res.json({ success: true, clientes: results });
+    });
+});
 app.post('/api/clientes/nuevo', async (req, res) => {
     const { nombre, documento, telefono } = req.body;
     if (!nombre) return res.status(400).json({ success: false, message: "El nombre es obligatorio." });
@@ -592,7 +890,7 @@ app.delete('/api/clientes/eliminar/:id', async (req, res) => {
     }
 });
 // ============================================================
-// 16. MÓDULO CONFIG: CRUD USUARIOS Y ROLES
+// MÓDULO CONFIG: CRUD USUARIOS Y ROLES
 // ============================================================
 app.get('/api/roles', async (req, res) => {
     try {
@@ -719,15 +1017,18 @@ app.post('/api/cuentas/guardar', (req, res) => {
 });
 // Crear una nueva mesa o fiado
 app.post('/api/cuentas/nueva', async (req, res) => {
-    const { tipo, identificador } = req.body;
+    // 1. Ahora también recibimos el id_cliente
+    const { tipo, identificador, id_cliente } = req.body; 
     
     if (!tipo || !identificador) {
         return res.status(400).json({ success: false, message: "Faltan datos de la cuenta." });
     }
 
     try {
-        const sql = "INSERT INTO cuentas (tipo, identificador) VALUES (?, ?)";
-        await db.promise().query(sql, [tipo, identificador]);
+        // 2. Agregamos id_cliente al INSERT. Si es mesa, entrará como NULL y no hay problema.
+        const sql = "INSERT INTO cuentas (tipo, identificador, id_cliente) VALUES (?, ?, ?)";
+        await db.promise().query(sql, [tipo, identificador, id_cliente || null]);
+        
         res.json({ success: true, message: "¡Cuenta aperturada con éxito!" });
     } catch (error) {
         console.error("Error creando cuenta:", error);
@@ -885,6 +1186,6 @@ app.post('/api/cuentas/cobrar', (req, res) => {
 });
 // Lanzar el servidor
 const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor de Licorería corriendo en http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor de la Licorería corriendo en http://localhost:${PORT}`);
 });

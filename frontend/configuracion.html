@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Configuración</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -21,6 +21,7 @@
         .modal-custom { background: #fff; width: 450px; border-radius: 8px; overflow: hidden; }
         .modal-header-custom { background: #006D5B; color: #fff; padding: 15px; display: flex; justify-content: space-between; }
     </style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
     
@@ -148,23 +149,23 @@
 
         async function cargarVarios() {
             // Categorias
-            const dCat = await fetchJSON('http://localhost:3000/api/categorias'); categoriasGlobal = dCat.categorias || [];
+            const dCat = await fetchJSON('/api/categorias'); categoriasGlobal = dCat.categorias || [];
             document.getElementById('tablaCategorias').innerHTML = categoriasGlobal.map(c => `<tr><td>${c.id_categoria}</td><td class="fw-bold">${c.nombre}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalCategoria(${c.id_categoria})">✏️</button></td></tr>`).join('');
             
             // Proveedores
-            const dProv = await fetchJSON('http://localhost:3000/api/proveedores'); proveedoresGlobal = dProv.proveedores || [];
+            const dProv = await fetchJSON('/api/proveedores'); proveedoresGlobal = dProv.proveedores || [];
             document.getElementById('tablaProveedores').innerHTML = proveedoresGlobal.map(p => `<tr><td>${p.ruc_dni||'-'}</td><td class="fw-bold">${p.razon_social}</td><td>${p.telefono||'-'}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalProveedor(${p.id_proveedor})">✏️</button></td></tr>`).join('');
         }
         
         // ... Funciones abrirModalCategoria/guardarCategoria/abrirModalProveedor/guardarProveedor iguales al paso anterior ...
         window.abrirModalCategoria = (id = null) => { document.getElementById('catId').value = id||''; document.getElementById('catNombre').value = id ? categoriasGlobal.find(c=>c.id_categoria==id).nombre : ''; document.getElementById('modalCategoria').classList.remove('oculto'); }
-        window.guardarCategoria = async () => { const id = document.getElementById('catId').value, nombre = document.getElementById('catNombre').value; if(!nombre) return; await fetchJSON(id ? `http://localhost:3000/api/categorias/editar/${id}` : `http://localhost:3000/api/categorias/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({nombre}) }); cerrarModal('modalCategoria'); cargarVarios(); }
+        window.guardarCategoria = async () => { const id = document.getElementById('catId').value, nombre = document.getElementById('catNombre').value; if(!nombre) return; await fetchJSON(id ? `/api/categorias/editar/${id}` : `/api/categorias/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({nombre}) }); cerrarModal('modalCategoria'); cargarVarios(); }
         window.abrirModalProveedor = (id = null) => { const p = id ? proveedoresGlobal.find(x=>x.id_proveedor==id) : {}; document.getElementById('provId').value = id||''; document.getElementById('provNombre').value = p.razon_social||''; document.getElementById('provDoc').value = p.ruc_dni||''; document.getElementById('provTel').value = p.telefono||''; document.getElementById('modalProveedor').classList.remove('oculto'); }
-        window.guardarProveedor = async () => { const id = document.getElementById('provId').value, d = { razon_social: document.getElementById('provNombre').value, ruc_dni: document.getElementById('provDoc').value, telefono: document.getElementById('provTel').value }; if(!d.razon_social) return; await fetchJSON(id ? `http://localhost:3000/api/proveedores/editar/${id}` : `http://localhost:3000/api/proveedores/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) }); cerrarModal('modalProveedor'); cargarVarios(); }
+        window.guardarProveedor = async () => { const id = document.getElementById('provId').value, d = { razon_social: document.getElementById('provNombre').value, ruc_dni: document.getElementById('provDoc').value, telefono: document.getElementById('provTel').value }; if(!d.razon_social) return; await fetchJSON(id ? `/api/proveedores/editar/${id}` : `/api/proveedores/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) }); cerrarModal('modalProveedor'); cargarVarios(); }
 
         // --- CRUD CLIENTES ---
         async function cargarClientes() {
-            const data = await fetchJSON('http://localhost:3000/api/clientes'); clientesGlobal = data.clientes || [];
+            const data = await fetchJSON('/api/clientes'); clientesGlobal = data.clientes || [];
             document.getElementById('tablaClientes').innerHTML = clientesGlobal.map(c => `<tr><td class="text-muted">${c.documento||'-'}</td><td class="fw-bold">${c.nombre}</td><td>${c.telefono||'-'}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalCliente(${c.id_cliente})">✏️</button> <button class="btn btn-sm btn-outline-danger" onclick="eliminarCliente(${c.id_cliente})">🗑️</button></td></tr>`).join('');
         }
 
@@ -180,23 +181,23 @@
             const id = document.getElementById('cliId').value;
             const d = { nombre: document.getElementById('cliNombre').value, documento: document.getElementById('cliDoc').value, telefono: document.getElementById('cliTel').value };
             if(!d.nombre) return alert("Nombre obligatorio.");
-            const res = await fetchJSON(id ? `http://localhost:3000/api/clientes/editar/${id}` : `http://localhost:3000/api/clientes/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
+            const res = await fetchJSON(id ? `/api/clientes/editar/${id}` : `/api/clientes/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
             alert(res.message); cerrarModal('modalCliente'); cargarClientes();
         }
 
         window.eliminarCliente = async (id) => {
             if(!confirm("¿Seguro que deseas eliminar este cliente?")) return;
-            const res = await fetchJSON(`http://localhost:3000/api/clientes/eliminar/${id}`, { method: 'DELETE' });
+            const res = await fetchJSON(`/api/clientes/eliminar/${id}`, { method: 'DELETE' });
             alert(res.message); if(res.success) cargarClientes();
         }
 
         // --- CRUD USUARIOS ---
         async function cargarUsuariosYRoles() {
-            const dRoles = await fetchJSON('http://localhost:3000/api/roles');
+            const dRoles = await fetchJSON('/api/roles');
             const select = document.getElementById('usuRol'); select.innerHTML = '';
             dRoles.roles.forEach(r => select.innerHTML += `<option value="${r.id_rol}">${r.descripcion}</option>`);
 
-            const dUsu = await fetchJSON('http://localhost:3000/api/usuarios'); usuariosGlobal = dUsu.usuarios || [];
+            const dUsu = await fetchJSON('/api/usuarios'); usuariosGlobal = dUsu.usuarios || [];
             document.getElementById('tablaUsuarios').innerHTML = usuariosGlobal.map(u => `<tr><td class="fw-bold">${u.nombre}</td><td><span class="badge bg-secondary">${u.usuario}</span></td><td>${u.rol}</td><td class="text-center"><button class="btn btn-sm btn-outline-primary" onclick="abrirModalUsuario(${u.id_usuario})">✏️</button> <button class="btn btn-sm btn-outline-danger" onclick="eliminarUsuario(${u.id_usuario})">🗑️</button></td></tr>`).join('');
         }
 
@@ -215,13 +216,13 @@
             const d = { nombre: document.getElementById('usuNombre').value, usuario: document.getElementById('usuLogin').value, id_rol: document.getElementById('usuRol').value, password: document.getElementById('usuPass').value };
             if(!d.nombre || !d.usuario || (!d.password && !id)) return alert("Faltan datos clave.");
             
-            const res = await fetchJSON(id ? `http://localhost:3000/api/usuarios/editar/${id}` : `http://localhost:3000/api/usuarios/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
+            const res = await fetchJSON(id ? `/api/usuarios/editar/${id}` : `/api/usuarios/nuevo`, { method: id?'PUT':'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) });
             alert(res.message); cerrarModal('modalUsuario'); cargarUsuariosYRoles();
         }
 
         window.eliminarUsuario = async (id) => {
             if(!confirm("¿Seguro que deseas eliminar este usuario?")) return;
-            const res = await fetchJSON(`http://localhost:3000/api/usuarios/eliminar/${id}`, { method: 'DELETE' });
+            const res = await fetchJSON(`/api/usuarios/eliminar/${id}`, { method: 'DELETE' });
             alert(res.message); if(res.success) cargarUsuariosYRoles();
         }
 

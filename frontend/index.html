@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- 🌟 AQUÍ LLAMAMOS A LA LIBRERÍA DE GRÁFICOS (Chart.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .navbar-custom { background-color: #006D5B; }
+        
+        .kpi-card { border: none; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.2s; }
+        .kpi-card:hover { transform: translateY(-5px); }
+        .icon-box { width: 60px; height: 60px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 28px; }
+        
+        .bg-teal-light { background-color: #e0f2f1; color: #006D5B; }
+        .bg-gold-light { background-color: #fcf4e3; color: #D4AF37; }
+        .bg-danger-light { background-color: #fdeaea; color: #dc3545; }
+        .bg-info-light { background-color: #e3f2fd; color: #0d6efd; }
+
+        .panel-custom { background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); height: 100%; }
+        .panel-title { font-size: 16px; font-weight: 600; color: #333; margin-bottom: 20px; border-bottom: 2px solid #f4f6f9; padding-bottom: 10px; }
+        
+        /* Contenedor para que el gráfico no se desborde en celulares */
+        .chart-container { position: relative; height: 250px; width: 100%; }
+    </style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div id="menu-container"></div>
+    
+    <div class="container mt-4 mb-5">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2 class="fw-bold text-dark m-0">Panel de Control</h2>
+                <p class="text-muted m-0">Resumen general y estadísticas de la licorería</p>
+            </div>
+            <div>
+                <button class="btn btn-outline-secondary" onclick="cargarDashboard()">
+                    <i class="fas fa-sync-alt"></i> Actualizar
+                </button>
+            </div>
+        </div>
+
+        <!-- FILA 1: TARJETAS KPI -->
+        <div class="row g-4 mb-4">
+            <div class="col-md-3 col-sm-6">
+                <div class="card kpi-card p-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="text-muted mb-1 fs-6">Ventas de Hoy</p>
+                            <h3 class="fw-bold m-0" style="color: #006D5B;">S/ <span id="kpiVentas">0.00</span></h3>
+                        </div>
+                        <div class="icon-box bg-teal-light"><i class="fas fa-hand-holding-usd"></i></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-3 col-sm-6">
+                <div class="card kpi-card p-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="text-muted mb-1 fs-6">Mesas Activas</p>
+                            <h3 class="fw-bold m-0 text-dark"><span id="kpiMesas">0</span></h3>
+                        </div>
+                        <div class="icon-box bg-info-light"><i class="fas fa-chair"></i></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-3 col-sm-6">
+                <div class="card kpi-card p-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="text-muted mb-1 fs-6">Stock Crítico</p>
+                            <h3 class="fw-bold m-0 text-danger"><span id="kpiStock">0</span> <span class="fs-6 fw-normal text-muted">Prod.</span></h3>
+                        </div>
+                        <div class="icon-box bg-danger-light"><i class="fas fa-exclamation-triangle"></i></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-3 col-sm-6">
+                <div class="card kpi-card p-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="text-muted mb-1 fs-6">Estado de Caja</p>
+                            <h4 class="fw-bold m-0" id="kpiCaja">CARGANDO...</h4>
+                        </div>
+                        <div class="icon-box bg-gold-light"><i class="fas fa-cash-register"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FILA 2: PANELES CON GRÁFICOS Y TABLAS -->
+        <div class="row g-4">
+            
+            <!-- 🌟 PANEL DEL GRÁFICO CIRCULAR -->
+            <div class="col-md-7">
+                <div class="panel-custom">
+                    <h5 class="panel-title"><i class="fas fa-chart-pie me-2"></i>Ingresos por Medio de Pago (Hoy)</h5>
+                    <div class="chart-container">
+                        <!-- Aquí se dibuja el gráfico interactivo -->
+                        <canvas id="graficoPagos"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PANEL DE STOCK CRÍTICO -->
+            <div class="col-md-5">
+                <div class="panel-custom">
+                    <h5 class="panel-title text-danger"><i class="fas fa-box-open me-2"></i>Productos por Agotarse</h5>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th class="text-center">Stock Actual</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tablaStockCritico">
+                                <tr><td colspan="2" class="text-center text-muted">Cargando datos...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script>
+    
+    <script>
+        // Variable global para destruir el gráfico viejo antes de redibujarlo al actualizar
+        let miGraficoPagos = null;
+
+        async function cargarDashboard() {
+            try {
+                const res = await fetch('/api/dashboard');
+                const data = await res.json();
+
+                if (data.success) {
+                    // 1. Llenar KPIs
+                    document.getElementById('kpiVentas').textContent = data.ventas_hoy.toFixed(2);
+                    document.getElementById('kpiMesas').textContent = data.mesas_activas;
+                    document.getElementById('kpiStock').textContent = data.stock_critico_count;
+                    
+                    const cajaEl = document.getElementById('kpiCaja');
+                    if (data.caja_abierta) {
+                        cajaEl.textContent = 'ABIERTA';
+                        cajaEl.className = 'fw-bold m-0 text-success';
+                    } else {
+                        cajaEl.textContent = 'CERRADA';
+                        cajaEl.className = 'fw-bold m-0 text-danger';
+                    }
+
+                    // 2. 🌟 RENDERIZAR EL GRÁFICO CIRCULAR CON CHART.JS
+                    const ctx = document.getElementById('graficoPagos').getContext('2d');
+                    
+                    // Si ya existe un gráfico previo, lo destruimos para que no se superponga
+                    if (miGraficoPagos) {
+                        miGraficoPagos.destroy();
+                    }
+
+                    miGraficoPagos = new Chart(ctx, {
+                        type: 'doughnut', // Tipo de gráfico circular hueco
+                        data: {
+                            labels: ['Efectivo', 'Yape', 'Plin', 'Tarjeta'],
+                            datasets: [{
+                                data: [
+                                    data.pagos.efectivo, 
+                                    data.pagos.yape, 
+                                    data.pagos.plin, 
+                                    data.pagos.tarjeta
+                                ],
+                                backgroundColor: [
+                                    '#198754', // Verde (Efectivo)
+                                    '#74088a', // Morado (Yape)
+                                    '#00b3f0', // Celeste (Plin)
+                                    '#ffc107'  // Amarillo (Tarjeta)
+                                ],
+                                borderWidth: 2,
+                                hoverOffset: 4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'bottom', // Pone los nombres abajo
+                                    labels: { font: { family: 'Poppins', size: 13 } }
+                                }
+                            }
+                        }
+                    });
+
+                    // 3. Llenar Tabla de Stock Crítico
+                    const tablaStock = document.getElementById('tablaStockCritico');
+                    tablaStock.innerHTML = '';
+                    
+                    if (data.productos_criticos.length === 0) {
+                        tablaStock.innerHTML = `<tr><td colspan="2" class="text-center text-success fw-bold py-4">¡Todo el stock está bien!</td></tr>`;
+                    } else {
+                        data.productos_criticos.forEach(prod => {
+                            tablaStock.innerHTML += `
+                                <tr>
+                                    <td class="fw-medium">${prod.nombre}</td>
+                                    <td class="text-center"><span class="badge bg-danger rounded-pill px-3 fs-6">${prod.stock}</span></td>
+                                </tr>
+                            `;
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error("Error cargando dashboard:", error);
+            }
+        }
+
+        // Ejecutar al cargar la página
+        cargarDashboard();
+    </script>
+</body>
+</html>

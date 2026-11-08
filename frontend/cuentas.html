@@ -28,13 +28,14 @@
         .cuenta-body { padding: 15px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
         .monto-total { font-size: 1.5rem; font-weight: 700; color: #006D5B; }
     </style>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
     <!-- Contenedor donde tu menu.js inyectará el menú lateral -->
     <div id="menu-container"></div>
 
-    <div class="container mt-4">
+    <div class="container mt-4 mb-5">
         <!-- Cabecera -->
         <div class="d-flex justify-content-between align-items-end mb-4">
             <div>
@@ -48,7 +49,7 @@
             </div>
         </div>
 
-        <!-- GRILLA DE TARJETAS (AQUÍ SE INYECTAN LAS MESAS REALES DESDE MYSQL) -->
+        <!-- GRILLA DE TARJETAS -->
         <div class="row g-4" id="contenedorCuentas">
             <!-- El JavaScript llenará esto -->
         </div>
@@ -56,24 +57,31 @@
 
     <!-- MODAL: CREAR NUEVA CUENTA -->
     <div class="modal fade" id="modalNuevaCuenta" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content border-0 shadow">
-                <div class="modal-header bg-teal text-white">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow rounded-4">
+                <div class="modal-header bg-teal text-white rounded-top-4">
                     <h5 class="modal-title fw-bold">✨ Aperturar Nueva Cuenta</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-4">
+                    <!-- Tipo de Cuenta -->
                     <div class="mb-3">
-                        <label class="fw-bold mb-2">Tipo de Cuenta:</label>
-                        <select class="form-select border-2" id="tipoCuenta">
+                        <label class="form-label fw-bold">Tipo de Cuenta:</label>
+                        <select id="selectTipoCuenta" class="form-select" onchange="cambiarTipoCuenta()">
                             <option value="mesa">🪑 Consumo en Mesa / Local</option>
                             <option value="cliente">👤 Cuenta a nombre de un Cliente</option>
                         </select>
                     </div>
-                    <div class="mb-4">
-                        <label class="fw-bold mb-2">Identificador (Nombre o N° de Mesa):</label>
-                        <input type="text" class="form-control border-2" id="identificadorCuenta" placeholder="Ej. Mesa 5 / Carlos Gómez">
+
+                    <!-- Identificador (Mesa o Cliente) -->
+                    <div class="mb-4" id="contenedorIdentificador">
+                        <label class="form-label fw-bold" id="labelIdentificador">Número de Mesa:</label>
+                        <div id="campoDinamico">
+                            <input type="text" id="inputMesa" class="form-control" placeholder="Ej. Mesa 5">
+                        </div>
                     </div>
+
+                    <!-- Botón fijo que nunca se borra -->
                     <button class="btn btn-teal w-100 fw-bold py-2 text-gold" id="btnGuardarCuenta">ABRIR CUENTA ➡️</button>
                 </div>
             </div>
@@ -95,13 +103,11 @@
             }
         });
 
-       // 1. LEER MESAS DESDE MYSQL (VERSIÓN CON DETECTOR DE ERRORES)
+        // 1. LEER MESAS DESDE MYSQL
         async function cargarCuentasAbiertas() {
             const contenedor = document.getElementById('contenedorCuentas');
             try {
                 const res = await fetch('/api/cuentas');
-                
-                // Si el servidor (Node.js) se apagó o falló
                 if (!res.ok) throw new Error('El backend no responde. ¿Está prendido tu servidor Node.js?');
                 
                 const data = await res.json();
@@ -113,20 +119,29 @@
                         const claseHeader = esMesa ? 'header-mesa' : 'header-cliente';
                         const icono = esMesa ? '🪑' : '👤';
                         
+                        // Botón de fiado dinámico (solo si es cliente)
+                        const btnFiado = esMesa ? '' : `<button class="btn btn-warning btn-sm w-100 fw-bold text-dark mt-2" onclick="pasarAFiado(${cuenta.id_cuenta}, ${cuenta.id_cliente}, ${cuenta.total})">📝 Pasar a Fiado</button>`;
+                        
                         contenedor.innerHTML += `
                             <div class="col-12 col-md-6 col-lg-3">
-                                <div class="card-cuenta border border-light">
+                                <div class="card-cuenta border border-light d-flex flex-column">
                                     <div class="cuenta-header ${claseHeader}">
                                         <span>${icono} ${cuenta.identificador}</span>
                                     </div>
-                                    <div class="cuenta-body text-center d-flex flex-column justify-content-between">
-                                        <div>
+                                    <div class="cuenta-body text-center d-flex flex-column flex-grow-1 justify-content-between">
+                                        <div class="mb-3">
                                             <div class="text-muted small mb-1">Total acumulado</div>
-                                            <h3 class="monto-total mb-3">S/ ${parseFloat(cuenta.total).toFixed(2)}</h3>
+                                            <h3 class="monto-total m-0">S/ ${parseFloat(cuenta.total || 0).toFixed(2)}</h3>
                                         </div>
-                                        <button class="btn btn-outline-primary w-100 fw-bold" onclick="abrirDetalle(${cuenta.id_cuenta})">
-                                            ✏️ Ver / Editar Tragos
-                                        </button>
+                                        <div>
+                                            <button class="btn btn-outline-primary btn-sm w-100 fw-bold mb-2" onclick="abrirDetalle(${cuenta.id_cuenta})">
+                                                ✏️ Ver / Editar Tragos
+                                            </button>
+                                            <button class="btn btn-success btn-sm w-100 fw-bold" onclick="cobrarCuenta(${cuenta.id_cuenta})">
+                                                💰 Cobrar
+                                            </button>
+                                            ${btnFiado}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -144,7 +159,6 @@
                 }
             } catch(error) {
                 console.error("Error completo:", error);
-                // Aquí pintamos el error en la pantalla para que lo veas sin F12
                 contenedor.innerHTML = `
                     <div class="col-12">
                         <div class="alert alert-danger fw-bold text-center p-4 shadow-sm">
@@ -158,43 +172,125 @@
 
         // 2. CREAR UNA CUENTA NUEVA EN LA BD
         async function guardarNuevaCuenta() {
-            const tipo = document.getElementById('tipoCuenta').value;
-            const identificador = document.getElementById('identificadorCuenta').value;
+            const tipo = document.getElementById('selectTipoCuenta').value;
+            let identificador = "";
+            let idClienteReal = null;
+
+            if (tipo === 'mesa' || tipo === 'Consumo en Mesa / Local') {
+                const inputMesa = document.getElementById('inputMesa');
+                identificador = inputMesa ? inputMesa.value.trim() : "";
+            } else {
+                const selectCliente = document.getElementById('selectClienteAsignado');
+                // Capturamos el ID real para la base de datos
+                idClienteReal = selectCliente ? selectCliente.value : null; 
+                // Capturamos el texto para mostrarlo bonito en la tarjeta
+                identificador = selectCliente ? selectCliente.options[selectCliente.selectedIndex].text : ""; 
+            }
             
-            if (!identificador.trim()) {
-                alert('⚠️ Escribe el nombre de la mesa o del cliente primero.');
+            if (!identificador) {
+                alert('⚠️ Escribe el nombre de la mesa o selecciona un cliente primero.');
                 return;
             }
             
             try {
+                // Ahora enviamos el id_cliente en el body
                 const res = await fetch('/api/cuentas/nueva', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tipo: tipo, identificador: identificador })
+                    body: JSON.stringify({ tipo: tipo, identificador: identificador, id_cliente: idClienteReal })
                 });
                 const data = await res.json();
                 
                 if (data.success) {
-                    // Cerrar el modal correctamente
                     const modalEl = document.getElementById('modalNuevaCuenta');
                     const modalInst = bootstrap.Modal.getInstance(modalEl);
-                    modalInst.hide();
+                    if (modalInst) {
+                        modalInst.hide();
+                    }
                     
-                    // Limpiar el campo y recargar las tarjetas
-                    document.getElementById('identificadorCuenta').value = '';
+                    const inputMesa = document.getElementById('inputMesa');
+                    if (inputMesa) inputMesa.value = '';
+                    
                     cargarCuentasAbiertas();
                 } else {
                     alert('Error: ' + data.message);
                 }
             } catch(error) {
                 console.error("Error al guardar:", error);
+                alert("Error de conexión con el servidor.");
             }
         }
 
         // 3. ENTRAR A LA MESA (REDIRECCIÓN)
         function abrirDetalle(id_cuenta) {
-            // Te manda a la pantalla de consumo amarrando el ID de esta mesa específica
             window.location.href = `detalle_cuenta.html?id=${id_cuenta}`;
+        }
+
+        // 4. PASAR A FIADO (CONEXIÓN CON EL MÓDULO DE CRÉDITOS)
+        async function pasarAFiado(idCuenta, idCliente, montoTotal) {
+            if(confirm('¿Seguro que deseas pasar esta cuenta a fiado?')) {
+                try {
+                    const res = await fetch('/api/cuentas/pasar-a-fiado', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id_cuenta: idCuenta, id_cliente: idCliente, monto_total: montoTotal })
+                    });
+                    const data = await res.json();
+                    if(data.success) {
+                        alert('La cuenta pasó a fiado correctamente.');
+                        cargarCuentasAbiertas(); // Refresca para que desaparezca de las mesas activas
+                    } else {
+                        alert('Error: ' + data.message);
+                    }
+                } catch(e) {
+                    console.error("Error al pasar a fiado:", e);
+                }
+            }
+        }
+
+        // 5. COBRAR CUENTA (MARCO DE REFERENCIA)
+        function cobrarCuenta(idCuenta) {
+            // Aquí llamarías a tu modal de cobro o redirección a pagos
+            alert('Falta integrar el modal de cobro directo para la cuenta ID: ' + idCuenta);
+        }
+
+        let listaClientesGlobal = [];
+
+        async function cargarClientesParaSelect() {
+            try {
+                const res = await fetch('/api/clientes');
+                const data = await res.json();
+                if (data.success) {
+                    listaClientesGlobal = data.clientes;
+                }
+            } catch (error) {
+                console.error("Error al cargar clientes:", error);
+            }
+        }
+
+        cargarClientesParaSelect();
+
+        function cambiarTipoCuenta() {
+            const tipo = document.getElementById('selectTipoCuenta').value;
+            const label = document.getElementById('labelIdentificador');
+            const campoDinamico = document.getElementById('campoDinamico');
+
+            if (tipo === 'mesa') {
+                label.textContent = "Número de Mesa:";
+                campoDinamico.innerHTML = `<input type="text" id="inputMesa" class="form-control" placeholder="Ej. Mesa 5">`;
+            } else {
+                label.textContent = "Seleccionar Cliente:";
+                let opcionesHtml = `<select id="selectClienteAsignado" class="form-select">
+                                        <option value="">-- Seleccione un cliente --</option>`;
+                
+                listaClientesGlobal.forEach(c => {
+                    // AQUÍ ESTABA EL ERROR: Cambiado value="${c.nombre}" por value="${c.id_cliente}"
+                    opcionesHtml += `<option value="${c.id_cliente}">${c.nombre}</option>`;
+                });
+                opcionesHtml += `</select>`;
+                
+                campoDinamico.innerHTML = opcionesHtml;
+            }
         }
     </script>
 </body>

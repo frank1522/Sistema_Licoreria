@@ -1,0 +1,31 @@
+/* Contenedor flexible para tablas en celulares */
+.table-responsive, table {
+    width: 100% !important;
+    max-width: 100%;
+    overflow-x: auto;
+    display: block;
+}
+
+/* Forzar que las celdas no rompan el diseño en pantallas chicas */
+@media (max-width: 768px) {
+    body {
+        padding: 5px;
+    }
+    .container, .card {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 10px !important;
+    }
+
+}
+/* Solo se aplica en celulares (pantallas menores a 768px) */
+@media (max-width: 768px) {
+    td.text-end, .text-end.fw-bold {
+        white-space: nowrap !important;
+    }
+    
+    /* Asegura que el S/ y el número no se separen en el móvil */
+    #montoNetoEfectivo, span[id^="monto"] {
+        display: inline-block;
+    }
+}
