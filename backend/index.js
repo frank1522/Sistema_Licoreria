@@ -1,1191 +1,1010 @@
-const path = require('path');
+// ============================================================
+// SERVIDOR PRINCIPAL - ERP LICORERÍA POS
+// Express + MySQL. Sirve el frontend y la API (/api/...).
+// Todas las rutas /api exigen sesión (token) salvo el login.
+// Qué puede hacer cada rol: ver la sección "PERMISOS" en el README.
+// ============================================================
+const os = require('os');
 const express = require('express');
 const cors = require('cors');
-const db = require('./db'); //
+
+const config = require('./lib/config');
+const log = require('./lib/log');
+const db = require('./db');
+const audit = require('./lib/auditoria');
+const { conTransaccion } = require('./lib/tx');
+const { esperarBaseDeDatos, migrar } = require('./lib/migraciones');
+const { hashear, verificar, esClaveDebil, firmarToken, crearAuth, crearLimiteLogin, HASH_FALSO } = require('./lib/seguridad');
+const bcrypt = require('bcryptjs');
+const respaldo = require('./lib/respaldo');
+const {
+    ErrorNegocio, limpiarTexto, entero, centavos, soles, aDecimal, fechaISO, repartirPagos,
+} = require('./lib/validar');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.disable('x-powered-by');
+if (config.TRUST_PROXY) app.set('trust proxy', true);
+
+// ---------- Cabeceras de seguridad básicas ----------
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+    next();
+});
+if (config.CORS_ORIGIN) {
+    app.use(cors({ origin: config.CORS_ORIGIN === '*' ? true : config.CORS_ORIGIN.split(',').map((s) => s.trim()) }));
+}
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(config.DIR_FRONTEND));
+
+const q = () => db.promise();
+const idParam = (v, nombre = 'El código') => {
+    const n = entero(v);
+    if (!(n > 0)) throw new ErrorNegocio(`${nombre} no es válido.`);
+    return n;
+};
+const dineroObligatorio = (v, mensaje) => {
+    if (v === undefined || v === null || v === '') throw new ErrorNegocio(mensaje);
+    const c = centavos(v);
+    if (Number.isNaN(c)) throw new ErrorNegocio(mensaje);
+    return c;
+};
+const motivoObligatorio = (v, max = 150) => {
+    const m = limpiarTexto(v, max);
+    if (m.length < 3) throw new ErrorNegocio('Escribe el motivo (mínimo 3 letras).');
+    return m;
+};
 
 // ============================================================
-// 1. RUTA DE AUTENTICACIÓN (LOGIN)
+// RUTAS PÚBLICAS: salud y login
 // ============================================================
-app.post('/api/auth/login', (req, res) => {
-    const { usuario, contrasena } = req.body;
+app.get('/api/salud', (req, res) => res.json({ success: true }));
 
-    if (!usuario || !contrasena) {
-        return res.status(400).json({ success: false, message: "Por favor, ingrese usuario y contraseña." });
+const limiteLogin = crearLimiteLogin();
+
+app.post('/api/auth/login', async (req, res) => {
+    const usuario = limpiarTexto((req.body || {}).usuario, 50);
+    const contrasena = typeof (req.body || {}).contrasena === 'string' ? req.body.contrasena : '';
+    if (!usuario || !contrasena) throw new ErrorNegocio('Por favor, ingrese usuario y contraseña.');
+
+    const espera = limiteLogin.bloqueado(req, usuario);
+    if (espera) {
+        return res.status(429).json({ success: false, message: `Demasiados intentos fallidos. Espera ${espera} minuto(s) e inténtalo otra vez.` });
     }
 
-    const sql = `
-        SELECT u.id_usuario, u.nombre, u.usuario, u.password, r.descripcion AS rol 
-        FROM usuarios u
-        INNER JOIN roles r ON u.id_rol = r.id_rol
-        WHERE u.usuario = ?
-    `;
-    
-    db.query(sql, [usuario], (err, results) => {
-        if (err) {
-            console.error("Error en MySQL:", err);
-            return res.status(500).json({ success: false, message: "Error interno en el servidor." });
-        }
+    const [rows] = await q().query(
+        `SELECT u.id_usuario, u.nombre, u.usuario, u.password, r.descripcion AS rol
+         FROM usuarios u INNER JOIN roles r ON u.id_rol = r.id_rol WHERE u.usuario = ?`, [usuario]);
+    const u = rows[0];
+    let v = { ok: false, rehash: false };
+    if (u) v = await verificar(contrasena, u.password);
+    else await bcrypt.compare(contrasena, HASH_FALSO); // mismo tiempo de respuesta aunque no exista
 
-        if (results.length === 0 || results[0].password !== contrasena) {
-            return res.status(401).json({ success: false, message: "Usuario o contraseña incorrectos." });
-        }
+    if (!u || !v.ok) {
+        limiteLogin.fallo(req, usuario);
+        log.aviso(`Login fallido para "${usuario}" desde ${req.ip}`);
+        return res.status(401).json({ success: false, message: 'Usuario o contraseña incorrectos.' });
+    }
+    limiteLogin.exito(req, usuario);
+    if (v.rehash) await q().query('UPDATE usuarios SET password = ? WHERE id_usuario = ?', [await hashear(contrasena), u.id_usuario]);
 
-        const user = results[0];
-        return res.json({
-            success: true,
-            message: `¡Bienvenido, ${user.nombre}!`,
-            usuario: {
-                id_usuario: user.id_usuario,
-                nombre: user.nombre,
-                rol: user.rol
-            }
-        });
-    }); 
+    res.json({
+        success: true,
+        message: `¡Bienvenido, ${u.nombre}!`,
+        token: firmarToken(u),
+        usuario: { id_usuario: u.id_usuario, nombre: u.nombre, rol: u.rol },
+        aviso: esClaveDebil(contrasena) ? 'Tu contraseña es muy simple o es la de fábrica. Cámbiala en Configuración → Usuarios.' : null,
+    });
 });
-// ==========================================
-// RUTA PARA EL DASHBOARD PRINCIPAL
-// ==========================================
+
+// ============================================================
+// DESDE AQUÍ TODO EXIGE SESIÓN
+// ============================================================
+const { auth, soloAdmin, olvidar } = crearAuth(db);
+app.use('/api', auth);
+
+app.get('/api/auth/yo', (req, res) => {
+    const { id_usuario, nombre, rol } = req.user;
+    res.json({ success: true, usuario: { id_usuario, nombre, rol } });
+});
+
+// ============================================================
+// DASHBOARD
+// ============================================================
 app.get('/api/dashboard', async (req, res) => {
+    const [ventas] = await q().query(`
+        SELECT IFNULL(SUM(pago_efectivo), 0) AS efectivo, IFNULL(SUM(pago_yape), 0) AS yape,
+               IFNULL(SUM(pago_plin), 0) AS plin, IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
+        FROM ventas WHERE DATE(fecha_venta) = CURDATE()`);
+    const pagos = {
+        efectivo: Number(ventas[0].efectivo), yape: Number(ventas[0].yape),
+        plin: Number(ventas[0].plin), tarjeta: Number(ventas[0].tarjeta),
+    };
+    const [mesas] = await q().query("SELECT COUNT(*) AS activas FROM cuentas WHERE estado = 'Abierta' OR estado = 'Pendiente'");
+    const [caja] = await q().query("SELECT id_caja FROM caja WHERE estado = 'Abierta' LIMIT 1");
+    const [criticos] = await q().query(`
+        SELECT nombre, stock_unidades AS stock FROM productos
+        WHERE stock_unidades <= stock_minimo ORDER BY stock_unidades ASC LIMIT 6`);
+    res.json({
+        success: true,
+        ventas_hoy: pagos.efectivo + pagos.yape + pagos.plin + pagos.tarjeta,
+        mesas_activas: mesas[0].activas,
+        caja_abierta: caja.length > 0,
+        pagos,
+        stock_critico_count: criticos.length,
+        productos_criticos: criticos,
+    });
+});
+
+// ============================================================
+// CAJA
+// ============================================================
+// Devuelve la caja abierta (solo hay una a la vez). Se usa en ventas, cobros y abonos.
+async function resolverCaja(conn) {
+    const [r] = await conn.query("SELECT id_caja FROM caja WHERE estado = 'Abierta' ORDER BY id_caja DESC LIMIT 1");
+    if (!r.length) throw new ErrorNegocio('La caja está cerrada. Abre un turno de caja antes de cobrar.');
+    return r[0].id_caja;
+}
+
+app.get('/api/caja/estado', async (req, res) => {
+    const [r] = await q().query(`
+        SELECT id_caja, id_usuario, fecha_apertura, monto_inicial FROM caja
+        WHERE estado = 'Abierta' ORDER BY id_caja DESC LIMIT 1`);
+    if (r.length > 0) return res.json({ success: true, cajaAbierta: true, id_caja: r[0].id_caja, datosCaja: r[0] });
+    res.json({ success: true, cajaAbierta: false, message: 'La caja del día se encuentra cerrada. Debe realizar la apertura.' });
+});
+
+app.post('/api/caja/apertura', async (req, res) => {
+    const montoC = dineroObligatorio((req.body || {}).monto_inicial, 'Datos inválidos para apertura.');
+    // Un solo INSERT atómico: si ya hay caja abierta no inserta nada (evita dos aperturas a la vez)
+    let r;
     try {
-        // 1. Sumar TODAS las ventas y pagos exactos del día de HOY
-        const sqlVentas = `
-            SELECT 
-                IFNULL(SUM(pago_efectivo), 0) AS efectivo,
-                IFNULL(SUM(pago_yape), 0) AS yape,
-                IFNULL(SUM(pago_plin), 0) AS plin,
-                IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
-            FROM ventas 
-            WHERE DATE(fecha_venta) = CURDATE()
-        `;
-        const [ventas] = await db.promise().query(sqlVentas);
-        
-        const pagos = {
-            efectivo: Number(ventas[0].efectivo),
-            yape: Number(ventas[0].yape),
-            plin: Number(ventas[0].plin),
-            tarjeta: Number(ventas[0].tarjeta)
-        };
-        const ventas_hoy = pagos.efectivo + pagos.yape + pagos.plin + pagos.tarjeta;
-
-        // 2. Contar Mesas/Cuentas Activas (Se asume que la tabla es 'cuentas' y estado 'Abierta' o 'Pendiente')
-        // *Si tu tabla se llama distinto (ej. 'mesas'), solo cámbiale el nombre aquí abajo:
-        const sqlMesas = `SELECT COUNT(*) AS activas FROM cuentas WHERE estado = 'Abierta' OR estado = 'Pendiente'`;
-        const [mesas] = await db.promise().query(sqlMesas);
-        const mesas_activas = mesas[0].activas;
-
-        // 3. Verificar si hay alguna caja abierta ahorita
-        const [caja] = await db.promise().query("SELECT id_caja FROM caja WHERE estado = 'Abierta' LIMIT 1");
-        const caja_abierta = caja.length > 0;
-
-        // 4. Buscar productos que se están agotando (Stock <= 10) para la tablita de alertas
-const sqlStock = `
-    SELECT nombre, stock_unidades AS stock 
-    FROM productos 
-    WHERE stock_unidades <= stock_minimo 
-    ORDER BY stock_unidades ASC 
-    LIMIT 6
-`;
-        const [productos_criticos] = await db.promise().query(sqlStock);
-
-        // Mandamos todo el paquete armado al frontend
-        res.json({
-            success: true,
-            ventas_hoy: ventas_hoy,
-            mesas_activas: mesas_activas,
-            caja_abierta: caja_abierta,
-            pagos: pagos,
-            stock_critico_count: productos_criticos.length,
-            productos_criticos: productos_criticos
-        });
-
-    } catch (error) {
-        console.error("Error al cargar el dashboard:", error);
-        res.status(500).json({ success: false, message: "Error al cargar las estadísticas del dashboard." });
+        [r] = await q().query(
+            `INSERT INTO caja (id_usuario, monto_inicial, estado)
+             SELECT ?, ?, 'Abierta' FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM caja WHERE estado = 'Abierta')`,
+            [req.user.id_usuario, aDecimal(montoC)]);
+    } catch (e) {
+        // Plan B por si el motor de base de datos no acepta ese INSERT: revisar y luego insertar
+        if (e.errno !== 1093 && e.code !== 'ER_UPDATE_TABLE_USED' && e.code !== 'ER_PARSE_ERROR') throw e;
+        const [ya] = await q().query("SELECT id_caja FROM caja WHERE estado = 'Abierta' LIMIT 1");
+        if (ya.length) throw new ErrorNegocio('Ya existe una sesión de caja abierta.');
+        [r] = await q().query("INSERT INTO caja (id_usuario, monto_inicial, estado) VALUES (?, ?, 'Abierta')",
+            [req.user.id_usuario, aDecimal(montoC)]);
     }
+    if (r.affectedRows === 0) throw new ErrorNegocio('Ya existe una sesión de caja abierta.');
+    await audit.registrar(db, req.user.id_usuario, `Abrió la caja #${r.insertId} con S/ ${soles(montoC)}`);
+    res.json({ success: true, message: '¡Caja abierta exitosamente!', id_caja: r.insertId });
 });
-// ============================================================
-// 2. RUTAS DE CAJA (ESTADO Y APERTURA)
-// ============================================================
-app.get('/api/caja/estado', (req, res) => {
-    const sql = `
-        SELECT id_caja, id_usuario, fecha_apertura, monto_inicial 
-        FROM caja 
-        WHERE estado = 'Abierta' 
-        ORDER BY id_caja DESC
-        LIMIT 1
-    `;
 
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Error al consultar el estado de la caja." });
+app.post('/api/caja/movimiento', async (req, res) => {
+    const b = req.body || {};
+    const tipo = b.tipo;
+    if (!['Ingreso', 'Gasto'].includes(tipo)) throw new ErrorNegocio('El tipo de movimiento debe ser Ingreso o Gasto.');
+    const montoC = dineroObligatorio(b.monto, 'Datos incompletos o monto inválido.');
+    if (montoC <= 0) throw new ErrorNegocio('El monto debe ser mayor a cero.');
+    const motivo = motivoObligatorio(b.motivo);
 
-        if (results.length > 0) {
-            return res.json({ 
-                success: true, 
-                cajaAbierta: true, 
-                id_caja: results[0].id_caja, // 🌟 CLAVE: Lo sacamos aquí afuera para que el frontend lo lea fácil
-                datosCaja: results[0] 
-            });
-        }
-
-        res.json({
-            success: true, 
-            cajaAbierta: false,
-            message: "La caja del día se encuentra cerrada. Debe realizar la apertura."
-        });
+    const id = await conTransaccion(db, async (conn) => {
+        const idCaja = await resolverCaja(conn).catch(() => { throw new ErrorNegocio('No se pueden registrar movimientos en una caja cerrada.'); });
+        const [r] = await conn.query('INSERT INTO movimientos_caja (id_caja, tipo, monto, motivo) VALUES (?, ?, ?, ?)', [idCaja, tipo, aDecimal(montoC), motivo]);
+        await audit.registrar(conn, req.user.id_usuario, `Caja #${idCaja}: registró ${tipo} de S/ ${soles(montoC)} (${motivo})`);
+        return r.insertId;
     });
+    res.json({ success: true, message: `¡Movimiento de [${tipo}] registrado con éxito!`, id_movimiento: id });
 });
 
-app.post('/api/caja/apertura', (req, res) => {
-    const { id_usuario, monto_inicial } = req.body;
+async function totalesCaja(conn, idCaja) {
+    const [mov] = await conn.query(`
+        SELECT IFNULL(SUM(CASE WHEN tipo = 'Gasto' THEN monto END), 0) AS gastos,
+               IFNULL(SUM(CASE WHEN tipo = 'Ingreso' THEN monto END), 0) AS ingresos
+        FROM movimientos_caja WHERE id_caja = ?`, [idCaja]);
+    const [ven] = await conn.query(`
+        SELECT IFNULL(SUM(pago_efectivo), 0) AS efectivo, IFNULL(SUM(pago_yape), 0) AS yape,
+               IFNULL(SUM(pago_plin), 0) AS plin, IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
+        FROM ventas WHERE id_caja = ?`, [idCaja]);
+    return {
+        gastos: Number(mov[0].gastos), ingresos: Number(mov[0].ingresos),
+        efectivo: Number(ven[0].efectivo), yape: Number(ven[0].yape),
+        plin: Number(ven[0].plin), tarjeta: Number(ven[0].tarjeta),
+    };
+}
 
-    if (id_usuario === undefined || monto_inicial === undefined || monto_inicial < 0) {
-        return res.status(400).json({ success: false, message: "Datos inválidos para apertura." });
-    }
-
-    const sqlVerificar = "SELECT id_caja FROM caja WHERE estado = 'Abierta' LIMIT 1";
-    db.query(sqlVerificar, (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Error al verificar cajas." });
-
-        if (results.length > 0) {
-            return res.status(400).json({ success: false, message: "Ya existe una sesión de caja abierta." });
-        }
-
-        const sqlInsertar = "INSERT INTO caja (id_usuario, monto_inicial, estado) VALUES (?, ?, 'Abierta')";
-        db.query(sqlInsertar, [id_usuario, monto_inicial], (err, insertResult) => {
-            if (err) return res.status(500).json({ success: false, message: "Error al abrir la caja." });
-            
-            res.json({
-                success: true, message: "¡Caja abierta exitosamente!", id_caja: insertResult.insertId
-            });
-        });
-    });
-});
-
-// ============================================================
-// RUTA PARA REGISTRAR MOVIMIENTOS DE CAJA (GASTOS / INGRESOS)
-// ============================================================
-app.post('/api/caja/movimiento', (req, res) => {
-    const { id_caja, tipo, monto, motivo } = req.body;
-
-    if (!id_caja || !tipo || !monto || !motivo || monto <= 0) {
-        return res.status(400).json({ success: false, message: "Datos incompletos o monto inválido." });
-    }
-
-    const sqlVerificarCaja = "SELECT estado FROM caja WHERE id_caja = ?";
-    db.query(sqlVerificarCaja, [id_caja], (err, results) => {
-        if (err || results.length === 0 || results[0].estado !== 'Abierta') {
-            return res.status(400).json({ success: false, message: "No se pueden registrar movimientos en una caja cerrada." });
-        }
-
-        const sqlInsertarMov = `
-            INSERT INTO movimientos_caja (id_caja, tipo, monto, motivo) 
-            VALUES (?, ?, ?, ?)
-        `;
-        db.query(sqlInsertarMov, [id_caja, tipo, monto, motivo], (err, insertResult) => {
-            if (err) return res.status(500).json({ success: false, message: "Error al registrar el movimiento." });
-            
-            res.json({ 
-                success: true, 
-                message: `¡Movimiento de [${tipo}] registrado con éxito!`, 
-                id_movimiento: insertResult.insertId 
-            });
-        });
-    });
-});
-// ============================================================
-// RUTA PARA OBTENER EL ARQUEO EN TIEMPO REAL (ACTUALIZADO CON VENTAS)
-// ============================================================
 app.get('/api/caja/arqueo/:id_caja', async (req, res) => {
-    const { id_caja } = req.params;
-
-    try {
-        const [caja] = await db.promise().query("SELECT monto_inicial, estado FROM caja WHERE id_caja = ?", [id_caja]);
-        if (caja.length === 0) return res.status(404).json({ success: false, message: "Caja no encontrada." });
-
-        const montoInicial = Number(caja[0].monto_inicial);
-
-        const [egresos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total_gastos FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Gasto'", [id_caja]);
-        const totalGastos = Number(egresos[0].total_gastos);
-
-        const [ingresos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total_ingresos FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Ingreso'", [id_caja]);
-        const totalIngresos = Number(ingresos[0].total_ingresos);
-
-        // 🌟 AQUÍ ESTÁ LA MAGIA: Sumamos todos los métodos de pago de la tabla ventas (incluye mesas y directas)
-        const sqlVentas = `
-            SELECT 
-                IFNULL(SUM(pago_efectivo), 0) AS efectivo,
-                IFNULL(SUM(pago_yape), 0) AS yape,
-                IFNULL(SUM(pago_plin), 0) AS plin,
-                IFNULL(SUM(pago_tarjeta), 0) AS tarjeta
-            FROM ventas 
-            WHERE id_caja = ?
-        `;
-        const [ventas] = await db.promise().query(sqlVentas, [id_caja]);
-        
-        const totalEfectivo = Number(ventas[0].efectivo);
-        const totalYape = Number(ventas[0].yape);
-        const totalPlin = Number(ventas[0].plin);
-        const totalTarjeta = Number(ventas[0].tarjeta);
-
-        res.json({
-            success: true,
-            monto_inicial: montoInicial,
-            total_gastos: totalGastos,
-            total_ingresos: totalIngresos,
-            total_efectivo: totalEfectivo,
-            total_yape: totalYape,
-            total_plin: totalPlin,
-            total_tarjeta: totalTarjeta
-        });
-
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-// ============================================================
-// MÓDULO POS: BUSCADOR DE PRODUCTOS (POR NOMBRE O CÓDIGO)
-// ============================================================
-app.get('/api/productos/buscar', (req, res) => {
-    // Recibimos la palabra o código que el cajero escribió
-    const { q } = req.query;
-
-    if (!q) {
-        return res.status(400).json({ 
-            success: false, 
-            message: "Por favor ingrese un nombre o código de barras." 
-        });
-    }
-
-    // Buscamos coincidencia exacta en código de barras, o coincidencia parcial en el nombre
-    const sqlBuscar = `
-        SELECT 
-            id_producto, 
-            codigo_barras, 
-            nombre, 
-            precio_venta_unitario, 
-            stock_unidades 
-        FROM productos 
-        WHERE codigo_barras = ? OR nombre LIKE ?
-        LIMIT 15
-    `;
-
-    // Los comodines % sirven para que encuentre la palabra aunque esté en medio del texto
-    const parametroLike = `%${q}%`;
-
-    db.query(sqlBuscar, [q, parametroLike], (err, results) => {
-        if (err) {
-            console.error("Error al buscar el producto:", err);
-            return res.status(500).json({ success: false, message: "Error interno del servidor." });
-        }
-
-        // Devolvemos la lista de productos encontrados al frontend
-        res.json({
-            success: true,
-            productos: results
-        });
+    const idCaja = idParam(req.params.id_caja, 'La caja');
+    const [caja] = await q().query('SELECT monto_inicial, estado FROM caja WHERE id_caja = ?', [idCaja]);
+    if (caja.length === 0) return res.status(404).json({ success: false, message: 'Caja no encontrada.' });
+    const t = await totalesCaja(q(), idCaja);
+    res.json({
+        success: true,
+        monto_inicial: Number(caja[0].monto_inicial),
+        total_gastos: t.gastos, total_ingresos: t.ingresos,
+        total_efectivo: t.efectivo, total_yape: t.yape, total_plin: t.plin, total_tarjeta: t.tarjeta,
     });
 });
-// ============================================================
-// RUTA PARA EL CIERRE DE CAJA (ARQUEO FINAL)
-// ============================================================
+
 app.put('/api/caja/cierre/:id_caja', async (req, res) => {
-    const { id_caja } = req.params;
-    const { monto_final_real } = req.body;
+    const idCaja = idParam(req.params.id_caja, 'La caja');
+    const realC = dineroObligatorio((req.body || {}).monto_final_real, 'Por favor, ingrese un monto final real válido.');
 
-    if (monto_final_real === undefined || monto_final_real < 0) {
-        return res.status(400).json({ success: false, message: "Por favor, ingrese un monto final real válido." });
-    }
+    const mensaje = await conTransaccion(db, async (conn) => {
+        const [caja] = await conn.query("SELECT monto_inicial FROM caja WHERE id_caja = ? AND estado = 'Abierta' FOR UPDATE", [idCaja]);
+        if (caja.length === 0) throw new ErrorNegocio('La caja ya estaba cerrada o no existe.');
+        const t = await totalesCaja(conn, idCaja);
+        const esperadoC = centavos(caja[0].monto_inicial) + centavos(t.ingresos) + centavos(t.efectivo) - centavos(t.gastos);
+        const descuadreC = realC - esperadoC;
 
-    try {
-        // 1. Verificar si la caja existe y traer el monto inicial
-        const [caja] = await db.promise().query("SELECT monto_inicial FROM caja WHERE id_caja = ? AND estado = 'Abierta'", [id_caja]);
-        
-        if (caja.length === 0) {
-            return res.status(400).json({ success: false, message: "La caja ya estaba cerrada o no existe." });
-        }
-        
-        const montoInicial = Number(caja[0].monto_inicial || 0);
+        await conn.query(
+            `UPDATE caja SET estado = 'Cerrada', monto_final_real = ?, descuadre = ?, fecha_cierre = CURRENT_TIMESTAMP,
+                    total_efectivo = ?, total_yape = ?, total_plin = ?, total_tarjeta = ?, total_gastos = ?
+             WHERE id_caja = ?`,
+            [aDecimal(realC), aDecimal(descuadreC), t.efectivo, t.yape, t.plin, t.tarjeta, t.gastos, idCaja]);
+        await audit.registrar(conn, req.user.id_usuario,
+            `Cerró la caja #${idCaja}: esperado S/ ${soles(esperadoC)}, contado S/ ${soles(realC)}, diferencia S/ ${soles(descuadreC)}`);
 
-        // 2. Sumar ingresos extra (de la tabla movimientos)
-        const [ingresos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Ingreso'", [id_caja]);
-        const totalIngresos = Number(ingresos[0].total);
-
-        // 3. Sumar gastos / egresos (de la tabla movimientos)
-        const [gastos] = await db.promise().query("SELECT IFNULL(SUM(monto), 0) AS total FROM movimientos_caja WHERE id_caja = ? AND tipo = 'Gasto'", [id_caja]);
-        const totalGastos = Number(gastos[0].total);
-
-        // 4. Sumar TODAS las ventas cobradas en EFECTIVO
-        const [ventas] = await db.promise().query("SELECT IFNULL(SUM(pago_efectivo), 0) AS total FROM ventas WHERE id_caja = ?", [id_caja]);
-        const totalVentasEfectivo = Number(ventas[0].total);
-
-        // 5. CÁLCULO PERFECTO: Inicial + Ingresos + Ventas Efectivo - Gastos
-        const esperado = montoInicial + totalIngresos + totalVentasEfectivo - totalGastos;
-        
-        // 6. Calcular el descuadre (Real - Esperado)
-        const descuadre = Number(monto_final_real) - esperado; 
-
-        // 7. Cerrar el turno guardando los números correctos
-        const sqlCerrar = `
-            UPDATE caja 
-            SET estado = 'Cerrada', 
-                monto_final_real = ?, 
-                descuadre = ?, 
-                fecha_cierre = CURRENT_TIMESTAMP 
-            WHERE id_caja = ?
-        `;
-
-        await db.promise().query(sqlCerrar, [monto_final_real, descuadre, id_caja]);
-
-        // 8. Mensaje inteligente para la alerta del cajero
-        let mensajeExtra = "";
-        if (descuadre === 0) {
-            mensajeExtra = "¡Caja cuadrada perfectamente a cero!";
-        } else if (descuadre > 0) {
-            mensajeExtra = `Sobran S/ ${descuadre.toFixed(2)} en gaveta.`;
-        } else {
-            mensajeExtra = `Faltan S/ ${Math.abs(descuadre).toFixed(2)} en gaveta.`;
-        }
-
-        res.json({
-            success: true,
-            message: `Turno finalizado. ${mensajeExtra}`
-        });
-
-    } catch (err) {
-        console.error("Error al cerrar caja:", err);
-        res.status(500).json({ success: false, message: "Error al procesar el cierre de caja." });
-    }
-});
-// ============================================================
-// MÓDULO POS: PROCESAR VENTA (MULTIPAGO Y DESCUENTO DE STOCK CORREGIDO)
-// ============================================================
-app.post('/api/ventas/procesar', async (req, res) => {
-    // 1. Recibimos TODOS los datos directamente desde el frontend nuevo
-    const { 
-        id_caja, id_usuario, total, 
-        pago_efectivo, pago_yape, pago_tarjeta, 
-        monto_recibido, vuelto, carrito 
-    } = req.body;
-
-    if (!id_caja || !carrito || carrito.length === 0) {
-        return res.status(400).json({ success: false, message: "Faltan datos o el carrito está vacío." });
-    }
-
-    try {
-        // 2. MAGIA DEL CORRELATIVO SECUENCIAL (Ej: NV-000014)
-        const [rows] = await db.promise().query("SELECT IFNULL(MAX(id_venta), 0) + 1 AS siguiente_ticket FROM ventas");
-        const siguienteTicket = rows[0].siguiente_ticket;
-        const numero_comprobante = "NV-" + String(siguienteTicket).padStart(6, '0');
-
-        // 3. INSERTAMOS LA VENTA (Con los montos exactos de Efectivo, Yape y Tarjeta)
-        const [resultVenta] = await db.promise().query(`
-            INSERT INTO ventas 
-            (numero_comprobante, id_caja, id_usuario, total, pago_efectivo, pago_yape, pago_tarjeta, monto_recibido, vuelto) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [numero_comprobante, id_caja, id_usuario, total, pago_efectivo, pago_yape, pago_tarjeta, monto_recibido, vuelto]);
-        
-        const idVenta = resultVenta.insertId;
-
-        // 4. GUARDAMOS EL DETALLE Y RESTAMOS EL STOCK EN BUCLE
-        for (let item of carrito) {
-            // Guardar qué licores se llevó
-            await db.promise().query(`
-                INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario, subtotal)
-                VALUES (?, ?, ?, ?, ?)
-            `, [idVenta, item.id_producto, item.cantidad, item.precio, (item.cantidad * item.precio)]);
-
-            // ¡DESCUENTO DE STOCK DIRECTO A LA BASE DE DATOS!
-            await db.promise().query(`
-                UPDATE productos 
-                SET stock_unidades = stock_unidades - ? 
-                WHERE id_producto = ?
-            `, [item.cantidad, item.id_producto]);
-        }
-        
-        res.json({ success: true, message: `¡Venta procesada con éxito! Ticket: ${numero_comprobante}` });
-        
-    } catch (error) {
-        console.error("Error al procesar la venta:", error);
-        res.status(500).json({ success: false, message: "Error interno al guardar la venta." });
-    }
-});
-
-// ============================================================
-//  CATÁLOGO DE PRODUCTOS (Para el Punto de Venta)
-// ============================================================
-app.get('/api/productos', (req, res) => {
-    const sql = `
-        SELECT p.id_producto, p.codigo_barras, p.nombre, c.nombre AS categoria, 
-               p.precio_venta_unitario, p.stock_unidades 
-        FROM productos p
-        INNER JOIN categorias c ON p.id_categoria = c.id_categoria
-        WHERE p.stock_unidades > 0
-    `;
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
+        if (descuadreC === 0) return '¡Caja cuadrada perfectamente a cero!';
+        if (descuadreC > 0) return `Sobran S/ ${soles(descuadreC)} en gaveta.`;
+        return `Faltan S/ ${soles(Math.abs(descuadreC))} en gaveta.`;
     });
+    res.json({ success: true, message: `Turno finalizado. ${mensaje}` });
 });
+
 // ============================================================
-//  MÓDULO INVENTARIO: LISTADO PRO CON SEMÁFORO
+// PRODUCTOS E INVENTARIO
 // ============================================================
+app.get('/api/productos/buscar', async (req, res) => {
+    const texto = limpiarTexto(req.query.q, 60);
+    if (!texto) throw new ErrorNegocio('Por favor ingrese un nombre o código de barras.');
+    const [rows] = await q().query(`
+        SELECT id_producto, codigo_barras, nombre, precio_venta_unitario, stock_unidades
+        FROM productos WHERE codigo_barras = ? OR nombre LIKE ? LIMIT 15`, [texto, `%${texto}%`]);
+    res.json({ success: true, productos: rows });
+});
+
+app.get('/api/productos', async (req, res) => {
+    const [rows] = await q().query(`
+        SELECT p.id_producto, p.codigo_barras, p.nombre, c.nombre AS categoria, p.precio_venta_unitario, p.stock_unidades
+        FROM productos p INNER JOIN categorias c ON p.id_categoria = c.id_categoria WHERE p.stock_unidades > 0`);
+    res.json(rows);
+});
+
 app.get('/api/inventario', async (req, res) => {
-    try {
-        const sql = `
-            SELECT 
-                p.id_producto, p.codigo_barras, p.nombre, p.precio_costo_unitario, 
-                p.precio_venta_unitario, p.stock_unidades, p.stock_minimo,
-                p.precio_venta_sixpack, p.precio_venta_caja, p.unidades_por_caja,
-                c.nombre AS categoria,
-                CASE 
-                    WHEN p.stock_unidades <= 0 THEN 'Agotado'
-                    WHEN p.stock_unidades <= p.stock_minimo THEN 'Bajo'
-                    ELSE 'Saludable'
-                END as estado_stock
-            FROM productos p
-            INNER JOIN categorias c ON p.id_categoria = c.id_categoria
-            ORDER BY p.stock_unidades ASC
-        `;
-        const [resultados] = await db.promise().query(sql);
-        res.json({ success: true, inventario: resultados });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar el inventario." });
-    }
+    const [rows] = await q().query(`
+        SELECT p.id_producto, p.codigo_barras, p.nombre, p.precio_costo_unitario,
+               p.precio_venta_unitario, p.stock_unidades, p.stock_minimo,
+               p.precio_venta_sixpack, p.precio_venta_caja, p.unidades_por_caja,
+               c.nombre AS categoria,
+               CASE WHEN p.stock_unidades <= 0 THEN 'Agotado'
+                    WHEN p.stock_unidades <= p.stock_minimo THEN 'Bajo' ELSE 'Saludable' END AS estado_stock
+        FROM productos p INNER JOIN categorias c ON p.id_categoria = c.id_categoria
+        ORDER BY p.stock_unidades ASC`);
+    // El costo (tu margen de ganancia) solo lo ve el administrador
+    if (req.user.rol !== 'Administrador') rows.forEach((r) => { delete r.precio_costo_unitario; });
+    res.json({ success: true, inventario: rows });
 });
-// ============================================================
-// MÓDULO INVENTARIO: REGISTRAR COMPRA AL PROVEEDOR
-// ============================================================
-app.post('/api/compras/registrar', async (req, res) => {
-    const { id_proveedor, id_usuario, numero_comprobante, total, detalles } = req.body;
 
-    if (!id_proveedor || !detalles || detalles.length === 0) {
-        return res.status(400).json({ success: false, message: "Faltan datos de la compra." });
-    }
+function leerProducto(b) {
+    const nombre = limpiarTexto(b.nombre, 150);
+    if (!nombre) throw new ErrorNegocio('El nombre del producto es obligatorio.');
+    const idCat = entero(b.id_categoria);
+    if (!(idCat > 0)) throw new ErrorNegocio('Selecciona una categoría.');
+    const venta = dineroObligatorio(b.precio_venta, 'El precio de venta es obligatorio y debe ser un número válido.');
+    const costo = (b.precio_costo === undefined || b.precio_costo === null || b.precio_costo === '') ? 0 : centavos(b.precio_costo);
+    if (Number.isNaN(costo)) throw new ErrorNegocio('El precio de costo no es válido.');
+    const opcional = (v, nombreCampo) => {
+        if (v === undefined || v === null || v === '') return null;
+        const c = centavos(v);
+        if (Number.isNaN(c)) throw new ErrorNegocio(`El ${nombreCampo} no es válido.`);
+        return aDecimal(c);
+    };
+    const unidades = (b.unidades_caja === undefined || b.unidades_caja === null || b.unidades_caja === '') ? 12 : entero(b.unidades_caja);
+    const minimo = (b.stock_minimo === undefined || b.stock_minimo === null || b.stock_minimo === '') ? 10 : entero(b.stock_minimo);
+    if (!(unidades > 0)) throw new ErrorNegocio('Las unidades por caja deben ser un número mayor a cero.');
+    if (!(minimo >= 0)) throw new ErrorNegocio('El stock mínimo no es válido.');
+    return {
+        codigo: limpiarTexto(b.codigo_barras, 50) || null,
+        nombre, idCat, costo: aDecimal(costo), venta: aDecimal(venta),
+        sixpack: opcional(b.precio_sixpack, 'precio del sixpack'), caja: opcional(b.precio_caja, 'precio de la caja'),
+        unidades, minimo,
+    };
+}
+const errorDuplicado = (e) => {
+    if (e && (e.code === 'ER_DUP_ENTRY' || e.errno === 1062)) throw new ErrorNegocio('Ya existe un producto con ese código de barras.', 409);
+    throw e;
+};
 
+app.post('/api/productos/nuevo', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const p = leerProducto(b);
+    const stock = (b.stock_inicial === undefined || b.stock_inicial === '' || b.stock_inicial === null) ? 0 : entero(b.stock_inicial);
+    if (!(stock >= 0)) throw new ErrorNegocio('El stock inicial no es válido.');
     try {
-        // 1. Guardar la cabecera de la compra
-        const [resultCompra] = await db.promise().query(`
-            INSERT INTO compras (id_proveedor, id_usuario, numero_comprobante, total) 
-            VALUES (?, ?, ?, ?)
-        `, [id_proveedor, id_usuario, numero_comprobante, total]);
-        
-        const idCompra = resultCompra.insertId;
+        await q().query(`
+            INSERT INTO productos (codigo_barras, nombre, id_categoria, precio_costo_unitario, precio_venta_unitario,
+                                   stock_unidades, stock_minimo, precio_venta_sixpack, precio_venta_caja, unidades_por_caja)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [p.codigo, p.nombre, p.idCat, p.costo, p.venta, stock, p.minimo, p.sixpack, p.caja, p.unidades]);
+    } catch (e) { errorDuplicado(e); }
+    await audit.registrar(db, req.user.id_usuario, `Creó el producto "${p.nombre}" (precio S/ ${p.venta.toFixed(2)}, stock inicial ${stock})`);
+    res.json({ success: true, message: '¡Producto creado exitosamente!' });
+});
 
-        // 2. Guardar el detalle y sumar el stock a los productos
-        for (let item of detalles) {
-            await db.promise().query(`
-                INSERT INTO detalle_compras (id_compra, id_producto, cantidad, precio_compra_unitario, subtotal)
-                VALUES (?, ?, ?, ?, ?)
-            `, [idCompra, item.id_producto, item.cantidad, item.precio_compra, (item.cantidad * item.precio_compra)]);
+app.put('/api/productos/editar/:id', soloAdmin, async (req, res) => {
+    const id = idParam(req.params.id, 'El producto');
+    const p = leerProducto(req.body || {});
+    const [antes] = await q().query('SELECT nombre, precio_costo_unitario, precio_venta_unitario FROM productos WHERE id_producto = ?', [id]);
+    if (!antes.length) throw new ErrorNegocio('El producto no existe.', 404);
+    try {
+        await q().query(`
+            UPDATE productos SET codigo_barras = ?, nombre = ?, id_categoria = ?, precio_costo_unitario = ?, precio_venta_unitario = ?,
+                   stock_minimo = ?, precio_venta_sixpack = ?, precio_venta_caja = ?, unidades_por_caja = ?
+            WHERE id_producto = ?`,
+        [p.codigo, p.nombre, p.idCat, p.costo, p.venta, p.minimo, p.sixpack, p.caja, p.unidades, id]);
+    } catch (e) { errorDuplicado(e); }
+    const a = antes[0];
+    if (centavos(a.precio_venta_unitario) !== centavos(p.venta) || centavos(a.precio_costo_unitario) !== centavos(p.costo)) {
+        await audit.registrar(db, req.user.id_usuario,
+            `Cambió precios de "${p.nombre}": venta S/ ${Number(a.precio_venta_unitario).toFixed(2)} → S/ ${p.venta.toFixed(2)}, costo S/ ${Number(a.precio_costo_unitario).toFixed(2)} → S/ ${p.costo.toFixed(2)}`);
+    }
+    res.json({ success: true, message: '¡Producto actualizado correctamente!' });
+});
 
-            // ¡SUMAMOS AL STOCK EN LA BASE DE DATOS!
-            await db.promise().query(`
-                UPDATE productos 
-                SET stock_unidades = stock_unidades + ?, precio_costo_unitario = ? 
-                WHERE id_producto = ?
-            `, [item.cantidad, item.precio_compra, item.id_producto]);
+app.post('/api/compras/registrar', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const idProveedor = idParam(b.id_proveedor, 'El proveedor');
+    if (!Array.isArray(b.detalles) || b.detalles.length === 0 || b.detalles.length > 300) throw new ErrorNegocio('Faltan datos de la compra.');
+    const lineas = b.detalles.map((d) => {
+        const id = entero(d && d.id_producto);
+        const cant = entero(d && d.cantidad);
+        const precioC = centavos(d && d.precio_compra);
+        if (!(id > 0) || !(cant > 0) || cant > 100000 || Number.isNaN(precioC)) throw new ErrorNegocio('Hay un producto de la compra con datos inválidos.');
+        return { id, cant, precioC };
+    });
+    const totalC = lineas.reduce((s, l) => s + l.precioC * l.cant, 0);
+    const comprobante = limpiarTexto(b.numero_comprobante, 50) || null;
+
+    await conTransaccion(db, async (conn) => {
+        const [prov] = await conn.query('SELECT id_proveedor FROM proveedores WHERE id_proveedor = ?', [idProveedor]);
+        if (!prov.length) throw new ErrorNegocio('El proveedor no existe.');
+        const [c] = await conn.query('INSERT INTO compras (id_proveedor, id_usuario, numero_comprobante, total) VALUES (?, ?, ?, ?)',
+            [idProveedor, req.user.id_usuario, comprobante, aDecimal(totalC)]);
+        for (const l of lineas) {
+            const [p] = await conn.query('SELECT id_producto FROM productos WHERE id_producto = ? FOR UPDATE', [l.id]);
+            if (!p.length) throw new ErrorNegocio(`El producto ID ${l.id} ya no existe.`);
+            await conn.query(`INSERT INTO detalle_compras (id_compra, id_producto, cantidad, precio_compra_unitario, subtotal) VALUES (?, ?, ?, ?, ?)`,
+                [c.insertId, l.id, l.cant, aDecimal(l.precioC), aDecimal(l.precioC * l.cant)]);
+            await conn.query('UPDATE productos SET stock_unidades = stock_unidades + ?, precio_costo_unitario = ? WHERE id_producto = ?',
+                [l.cant, aDecimal(l.precioC), l.id]);
         }
+        await audit.registrar(conn, req.user.id_usuario, `Registró compra #${c.insertId} por S/ ${soles(totalC)}`);
+    });
+    res.json({ success: true, message: '¡Compra registrada y stock actualizado!' });
+});
 
-        // 3. Dejar huella en la auditoría
-        await db.promise().query(`INSERT INTO logs_auditoria (id_usuario, accion) VALUES (?, ?)`, 
-            [id_usuario, `Registró compra #${idCompra} por S/ ${total}`]
-        );
+app.post('/api/inventario/ajuste', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const idProducto = idParam(b.id_producto, 'El producto');
+    const tipo = b.tipo_ajuste;
+    if (!['Entrada', 'Salida'].includes(tipo)) throw new ErrorNegocio('El tipo de ajuste debe ser Entrada o Salida.');
+    const cantidad = entero(b.cantidad);
+    if (!(cantidad > 0) || cantidad > 100000) throw new ErrorNegocio('Ingrese una cantidad válida mayor a cero.');
+    const motivo = motivoObligatorio(b.motivo, 200);
 
-        res.json({ success: true, message: "¡Compra registrada y stock actualizado!" });
-    } catch (error) {
-        console.error("Error al registrar compra:", error);
-        res.status(500).json({ success: false, message: "Error interno al procesar la compra." });
-    }
+    await conTransaccion(db, async (conn) => {
+        const [p] = await conn.query('SELECT nombre, stock_unidades FROM productos WHERE id_producto = ? FOR UPDATE', [idProducto]);
+        if (!p.length) throw new ErrorNegocio('El producto no existe.', 404);
+        if (tipo === 'Salida' && p[0].stock_unidades < cantidad) {
+            throw new ErrorNegocio(`No puedes sacar ${cantidad}: solo hay ${p[0].stock_unidades} en stock.`);
+        }
+        await conn.query('INSERT INTO ajustes_inventario (id_producto, id_usuario, tipo_ajuste, cantidad, motivo) VALUES (?, ?, ?, ?, ?)',
+            [idProducto, req.user.id_usuario, tipo, cantidad, motivo]);
+        await conn.query(`UPDATE productos SET stock_unidades = stock_unidades ${tipo === 'Entrada' ? '+' : '-'} ? WHERE id_producto = ?`, [cantidad, idProducto]);
+        await audit.registrar(conn, req.user.id_usuario, `Ajuste de inventario (${tipo}): ${cantidad} uds de "${p[0].nombre}". Motivo: ${motivo}`);
+    });
+    res.json({ success: true, message: '¡Inventario ajustado correctamente!' });
 });
 
 // ============================================================
-// MÓDULO INVENTARIO: AJUSTE DE STOCK FÍSICO (Roturas / Mermas)
-// ============================================================
-app.post('/api/inventario/ajuste', async (req, res) => {
-    const { id_producto, id_usuario, tipo_ajuste, cantidad, motivo } = req.body;
-
-    if (!id_producto || !tipo_ajuste || !cantidad || cantidad <= 0 || !motivo) {
-        return res.status(400).json({ success: false, message: "Datos incompletos para el ajuste." });
-    }
-
-    try {
-        // 1. Registrar el movimiento fantasma
-        await db.promise().query(`
-            INSERT INTO ajustes_inventario (id_producto, id_usuario, tipo_ajuste, cantidad, motivo) 
-            VALUES (?, ?, ?, ?, ?)
-        `, [id_producto, id_usuario, tipo_ajuste, cantidad, motivo]);
-
-        // 2. Aplicar la suma o resta al producto
-        const operador = tipo_ajuste === 'Entrada' ? '+' : '-';
-        await db.promise().query(`
-            UPDATE productos 
-            SET stock_unidades = stock_unidades ${operador} ? 
-            WHERE id_producto = ?
-        `, [cantidad, id_producto]);
-
-        // 3. Dejar huella en la auditoría
-        await db.promise().query(`INSERT INTO logs_auditoria (id_usuario, accion) VALUES (?, ?)`, 
-            [id_usuario, `Ajuste de inventario (${tipo_ajuste}): ${cantidad} uds del producto ID ${id_producto}. Motivo: ${motivo}`]
-        );
-
-        res.json({ success: true, message: "¡Inventario ajustado correctamente!" });
-    } catch (error) {
-        console.error("Error al ajustar inventario:", error);
-        res.status(500).json({ success: false, message: "Error interno al ajustar el stock." });
-    }
-});
-// ============================================================
-// MÓDULO COMPRAS: CARGAR PROVEEDORES
+// CATÁLOGOS: categorías y proveedores (ver: todos / modificar: admin)
 // ============================================================
 app.get('/api/proveedores', async (req, res) => {
-    try {
-        const [proveedores] = await db.promise().query("SELECT * FROM proveedores");
-        res.json({ success: true, proveedores });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar proveedores." });
-    }
+    const [proveedores] = await q().query('SELECT * FROM proveedores');
+    res.json({ success: true, proveedores });
 });
-// ============================================================
-// MÓDULO INVENTARIO: CARGAR CATEGORÍAS
-// ============================================================
 app.get('/api/categorias', async (req, res) => {
-    try {
-        const [categorias] = await db.promise().query("SELECT * FROM categorias");
-        res.json({ success: true, categorias });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar categorías." });
-    }
+    const [categorias] = await q().query('SELECT * FROM categorias');
+    res.json({ success: true, categorias });
+});
+app.post('/api/categorias/nuevo', soloAdmin, async (req, res) => {
+    const nombre = limpiarTexto((req.body || {}).nombre, 50);
+    if (!nombre) throw new ErrorNegocio('El nombre es obligatorio.');
+    await q().query('INSERT INTO categorias (nombre) VALUES (?)', [nombre]);
+    res.json({ success: true, message: 'Categoría agregada con éxito.' });
+});
+app.put('/api/categorias/editar/:id', soloAdmin, async (req, res) => {
+    const nombre = limpiarTexto((req.body || {}).nombre, 50);
+    if (!nombre) throw new ErrorNegocio('El nombre es obligatorio.');
+    await q().query('UPDATE categorias SET nombre = ? WHERE id_categoria = ?', [nombre, idParam(req.params.id)]);
+    res.json({ success: true, message: 'Categoría actualizada.' });
+});
+app.post('/api/proveedores/nuevo', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const razon = limpiarTexto(b.razon_social, 150);
+    if (!razon) throw new ErrorNegocio('La razón social es obligatoria.');
+    await q().query('INSERT INTO proveedores (razon_social, ruc_dni, telefono) VALUES (?, ?, ?)',
+        [razon, limpiarTexto(b.ruc_dni, 15) || null, limpiarTexto(b.telefono, 20) || null]);
+    res.json({ success: true, message: 'Proveedor registrado.' });
+});
+app.put('/api/proveedores/editar/:id', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const razon = limpiarTexto(b.razon_social, 150);
+    if (!razon) throw new ErrorNegocio('La razón social es obligatoria.');
+    await q().query('UPDATE proveedores SET razon_social = ?, ruc_dni = ?, telefono = ? WHERE id_proveedor = ?',
+        [razon, limpiarTexto(b.ruc_dni, 15) || null, limpiarTexto(b.telefono, 20) || null, idParam(req.params.id)]);
+    res.json({ success: true, message: 'Proveedor actualizado.' });
 });
 
 // ============================================================
-//  MÓDULO INVENTARIO: CREAR NUEVO PRODUCTO
+// VENTAS (PUNTO DE VENTA)
+// El servidor SIEMPRE usa los precios y el stock de la base de datos;
+// lo que mande el navegador (precio/total) se ignora.
 // ============================================================
-app.post('/api/productos/nuevo', async (req, res) => {
-    const { codigo_barras, nombre, id_categoria, precio_costo, precio_venta, stock_inicial, stock_minimo, precio_sixpack, precio_caja, unidades_caja } = req.body;
-
-    try {
-        await db.promise().query(`
-            INSERT INTO productos (codigo_barras, nombre, id_categoria, precio_costo_unitario, precio_venta_unitario, stock_unidades, stock_minimo, precio_venta_sixpack, precio_venta_caja, unidades_por_caja)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [codigo_barras, nombre, id_categoria, precio_costo, precio_venta, stock_inicial, stock_minimo, precio_sixpack, precio_caja, unidades_caja]);
-        
-        res.json({ success: true, message: "¡Producto creado exitosamente!" });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al guardar el producto." });
+function normalizarCarrito(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) throw new ErrorNegocio('El carrito está vacío.');
+    if (arr.length > 200) throw new ErrorNegocio('Demasiados productos en una sola operación.');
+    const juntos = new Map();
+    for (const x of arr) {
+        const id = entero(x && x.id_producto);
+        const cant = entero(x && x.cantidad);
+        if (!(id > 0) || !(cant > 0) || cant > 9999) throw new ErrorNegocio('Hay un producto con datos inválidos en el carrito.');
+        juntos.set(id, (juntos.get(id) || 0) + cant);
     }
-});
+    // Orden fijo por ID: evita bloqueos cruzados cuando dos personas venden a la vez
+    return [...juntos].map(([id, cant]) => ({ id, cant })).sort((a, b) => a.id - b.id);
+}
 
-// ============================================================
-//  MÓDULO INVENTARIO: EDITAR PRODUCTO EXISTENTE
-// ============================================================
-app.put('/api/productos/editar/:id', async (req, res) => {
-    const { id } = req.params;
-    const { codigo_barras, nombre, id_categoria, precio_costo, precio_venta, stock_minimo, precio_sixpack, precio_caja, unidades_caja } = req.body;
-
-    try {
-        await db.promise().query(`
-            UPDATE productos 
-            SET codigo_barras = ?, nombre = ?, id_categoria = ?, precio_costo_unitario = ?, precio_venta_unitario = ?, stock_minimo = ?, precio_venta_sixpack = ?, precio_venta_caja = ?, unidades_por_caja = ?
-            WHERE id_producto = ?
-        `, [codigo_barras, nombre, id_categoria, precio_costo, precio_venta, stock_minimo, precio_sixpack, precio_caja, unidades_caja, id]);
-        
-        res.json({ success: true, message: "¡Producto actualizado correctamente!" });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al actualizar el producto." });
-    }
-});
-// ============================================================
-//  MÓDULO CONFIG: CRUD CATEGORÍAS
-// ============================================================
-app.post('/api/categorias/nuevo', async (req, res) => {
-    const { nombre } = req.body;
-    if (!nombre) return res.status(400).json({ success: false, message: "El nombre es obligatorio." });
-
-    try {
-        await db.promise().query("INSERT INTO categorias (nombre) VALUES (?)", [nombre]);
-        res.json({ success: true, message: "Categoría agregada con éxito." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al crear categoría." });
-    }
-});
-
-app.put('/api/categorias/editar/:id', async (req, res) => {
-    const { id } = req.params;
-    const { nombre } = req.body;
-    try {
-        await db.promise().query("UPDATE categorias SET nombre = ? WHERE id_categoria = ?", [nombre, id]);
-        res.json({ success: true, message: "Categoría actualizada." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al actualizar." });
-    }
-});
-
-// ============================================================
-//  MÓDULO CONFIG: CRUD PROVEEDORES
-// ============================================================
-app.post('/api/proveedores/nuevo', async (req, res) => {
-    const { razon_social, ruc_dni, telefono } = req.body;
-    if (!razon_social) return res.status(400).json({ success: false, message: "La razón social es obligatoria." });
-
-    try {
-        await db.promise().query("INSERT INTO proveedores (razon_social, ruc_dni, telefono) VALUES (?, ?, ?)", [razon_social, ruc_dni, telefono]);
-        res.json({ success: true, message: "Proveedor registrado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al registrar proveedor." });
-    }
-});
-
-app.put('/api/proveedores/editar/:id', async (req, res) => {
-    const { id } = req.params;
-    const { razon_social, ruc_dni, telefono } = req.body;
-    try {
-        await db.promise().query("UPDATE proveedores SET razon_social = ?, ruc_dni = ?, telefono = ? WHERE id_proveedor = ?", [razon_social, ruc_dni, telefono, id]);
-        res.json({ success: true, message: "Proveedor actualizado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al actualizar." });
-    }
-});
-// ==========================================
-// RUTA PARA REPORTES AVANZADOS (RESUMIDO Y DETALLADO)
-// ==========================================
-app.get('/api/reportes/avanzado', async (req, res) => {
-    const { inicio, fin, cliente } = req.query;
-
-    try {
-        // Base de la consulta filtrando por rango de fechas
-        let sql = `SELECT * FROM ventas WHERE DATE(fecha_venta) BETWEEN ? AND ?`;
-        let params = [inicio, fin];
-
-        // Si el usuario escribió un cliente o mesa, agregamos el filtro dinámicamente
-        if (cliente && cliente.trim() !== '') {
-            sql += ` AND cliente_mesa LIKE ?`;
-            params.push(`%${cliente}%`);
+// Toma y bloquea cada producto, valida stock y devuelve las líneas con el precio REAL
+async function prepararLineas(conn, items) {
+    const lineas = [];
+    for (const it of items) {
+        const [p] = await conn.query(
+            'SELECT id_producto, nombre, precio_venta_unitario, stock_unidades FROM productos WHERE id_producto = ? FOR UPDATE', [it.id]);
+        if (!p.length) throw new ErrorNegocio(`Un producto del carrito ya no existe (ID ${it.id}). Actualiza la pantalla.`);
+        const prod = p[0];
+        if (!config.PERMITIR_VENTA_SIN_STOCK && Number(prod.stock_unidades) < it.cant) {
+            throw new ErrorNegocio(`Stock insuficiente de "${prod.nombre}": quedan ${prod.stock_unidades} y se intentan ${it.cant}.`);
         }
-
-        sql += ` ORDER BY fecha_venta DESC`;
-
-        const [ventas] = await db.promise().query(sql, params);
-
-        // Calcular los totales resumidos en el backend
-        let totalEfectivo = 0;
-        let totalDigital = 0;
-
-        ventas.forEach(v => {
-            totalEfectivo += Number(v.pago_efectivo || 0);
-            totalDigital += Number(v.pago_yape || 0) + Number(v.pago_plin || 0) + Number(v.pago_tarjeta || 0);
-        });
-
-        res.json({
-            success: true,
-            totales: {
-                efectivo: totalEfectivo,
-                digital: totalDigital,
-                general: totalEfectivo + totalDigital
-            },
-            ventas: ventas
-        });
-
-    } catch (error) {
-        console.error("Error al generar reporte avanzado:", error);
-        res.status(500).json({ success: false, message: "Error al generar el reporte" });
+        const precioC = centavos(prod.precio_venta_unitario);
+        lineas.push({ id: it.id, nombre: prod.nombre, cant: it.cant, precioC, subC: precioC * it.cant });
     }
+    return lineas;
+}
+
+// Crea la cabecera de venta con número de comprobante único (NV-000123) sin choques entre cajeros
+async function crearVenta(conn, d) {
+    const temporal = 'T' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+    const [r] = await conn.query(
+        `INSERT INTO ventas (numero_comprobante, id_caja, id_usuario, id_cliente, total, pago_efectivo, pago_yape,
+                             pago_plin, pago_tarjeta, monto_recibido, vuelto, cliente_mesa)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [temporal, d.idCaja, d.idUsuario, d.idCliente, aDecimal(d.totalC), aDecimal(d.pagos.ef), aDecimal(d.pagos.ya),
+            aDecimal(d.pagos.pl), aDecimal(d.pagos.ta), aDecimal(d.pagos.recibido), aDecimal(d.pagos.vuelto), d.clienteMesa || null]);
+    const numero = d.prefijo + String(r.insertId).padStart(6, '0');
+    await conn.query('UPDATE ventas SET numero_comprobante = ? WHERE id_venta = ?', [numero, r.insertId]);
+    return { id: r.insertId, numero };
+}
+
+const pagosDe = (b) => ({ ef: b.pago_efectivo, ya: b.pago_yape, pl: b.pago_plin, ta: b.pago_tarjeta });
+
+app.post('/api/ventas/procesar', async (req, res) => {
+    const b = req.body || {};
+    const items = normalizarCarrito(b.carrito);
+
+    const r = await conTransaccion(db, async (conn) => {
+        const idCaja = await resolverCaja(conn);
+        const lineas = await prepararLineas(conn, items);
+        const totalC = lineas.reduce((s, l) => s + l.subC, 0);
+        const pagos = repartirPagos(pagosDe(b), totalC, { permiteVuelto: true, recibidoCliente: centavos(b.monto_recibido) });
+
+        const { id, numero } = await crearVenta(conn, {
+            idCaja, idUsuario: req.user.id_usuario, idCliente: 1, totalC, pagos, clienteMesa: null, prefijo: 'NV-',
+        });
+        for (const l of lineas) {
+            await conn.query(
+                `INSERT INTO detalle_ventas (id_venta, id_producto, tipo_empaque, cantidad, precio_unitario, subtotal) VALUES (?, ?, 'Unidad', ?, ?, ?)`,
+                [id, l.id, l.cant, aDecimal(l.precioC), aDecimal(l.subC)]);
+            await conn.query('UPDATE productos SET stock_unidades = stock_unidades - ? WHERE id_producto = ?', [l.cant, l.id]);
+        }
+        return { id, numero, totalC, vuelto: pagos.vuelto };
+    });
+
+    const extra = r.vuelto > 0 ? ` Vuelto: S/ ${soles(r.vuelto)}.` : '';
+    res.json({
+        success: true,
+        message: `¡Venta ${r.numero} registrada! Total S/ ${soles(r.totalC)}.${extra}`,
+        id_venta: r.id, numero_comprobante: r.numero, total: aDecimal(r.totalC), vuelto: aDecimal(r.vuelto),
+    });
 });
+
 app.get('/api/ventas/ticket/:id_venta', async (req, res) => {
-    const { id_venta } = req.params;
-
-    try {
-        const sqlVenta = `SELECT * FROM ventas WHERE id_venta = ?`;
-        const [venta] = await db.promise().query(sqlVenta, [id_venta]);
-
-        if (venta.length === 0) {
-            return res.status(404).json({ success: false, message: "Venta no encontrada" });
-        }
-
-        // 🌟 JALANDO TUS COLUMNAS EXACTAS DE LA FOTO
-        const sqlDetalle = `
-            SELECT dv.cantidad, dv.tipo_empaque, dv.precio_unitario, dv.subtotal, p.nombre AS producto_nombre 
-            FROM detalle_ventas dv
-            JOIN productos p ON dv.id_producto = p.id_producto
-            WHERE dv.id_venta = ?
-        `;
-        const [detalles] = await db.promise().query(sqlDetalle, [id_venta]);
-
-        res.json({
-            success: true,
-            venta: venta[0],
-            detalles: detalles
-        });
-
-    } catch (error) {
-        console.error("Error al generar ticket:", error);
-        res.status(500).json({ success: false, message: "Error del servidor al generar ticket" });
-    }
-});
-// 1. Listar clientes que deben dinero
-app.get('/api/fiados', async (req, res) => {
-    try {
-        const sql = `SELECT id_cliente, nombre, telefono, deuda_acumulada FROM clientes WHERE deuda_acumulada > 0 ORDER BY deuda_acumulada DESC`;
-        const [clientes] = await db.promise().query(sql);
-        res.json({ success: true, clientes: clientes });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar deudores." });
-    }
+    const id = idParam(req.params.id_venta, 'La venta');
+    const [venta] = await q().query(
+        `SELECT v.*, u.nombre AS cajero FROM ventas v LEFT JOIN usuarios u ON u.id_usuario = v.id_usuario WHERE v.id_venta = ?`, [id]);
+    if (venta.length === 0) return res.status(404).json({ success: false, message: 'Venta no encontrada' });
+    const [detalles] = await q().query(
+        `SELECT dv.cantidad, dv.tipo_empaque, dv.precio_unitario, dv.subtotal, p.nombre AS producto_nombre
+         FROM detalle_ventas dv JOIN productos p ON dv.id_producto = p.id_producto WHERE dv.id_venta = ?`, [id]);
+    res.json({ success: true, venta: venta[0], detalles });
 });
 
-// 2. Registrar el pago de una deuda
-app.post('/api/fiados/abonar', async (req, res) => {
-    const { id_cliente, monto_total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, id_caja, id_usuario } = req.body;
-
-    if (!id_caja) {
-        return res.status(400).json({ success: false, message: "No se encontró un turno de caja activo para registrar el abono." });
-    }
-
-    try {
-        await db.promise().query('BEGIN');
-
-        // 1. Restar la deuda al cliente
-        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada - ? WHERE id_cliente = ?`;
-        await db.promise().query(sqlCliente, [monto_total, id_cliente]);
-
-        // 2. Registrar el ingreso en la tabla ventas usando la caja y usuario reales
-        const sqlIngreso = `
-            INSERT INTO ventas (
-                numero_comprobante, id_caja, id_usuario, id_cliente, 
-                fecha_venta, total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, monto_recibido, vuelto
-            ) 
-            VALUES (CONCAT('ABONO-', FLOOR(RAND() * 90000 + 10000)), ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, 0.00)
-        `;
-        
-        await db.promise().query(sqlIngreso, [
-            id_caja, 
-            id_usuario || 1, 
-            id_cliente, 
-            monto_total, 
-            pago_efectivo, 
-            pago_yape, 
-            pago_plin, 
-            pago_tarjeta, 
-            monto_total
-        ]);
-
-        await db.promise().query('COMMIT');
-        res.json({ success: true, message: "Abono guardado exitosamente." });
-
-    } catch (error) {
-        await db.promise().query('ROLLBACK');
-        console.error("Error al registrar abono:", error);
-        res.status(500).json({ success: false, message: "Error al guardar el abono en el servidor." });
-    }
-});
-
-
-// 2. Registrar el pago parcial o total de una deuda
-app.post('/api/fiados/abonar', async (req, res) => {
-    const { id_cliente, monto, metodo } = req.body;
-
-    try {
-        await db.promise().query('BEGIN');
-
-        // Restar la deuda al cliente
-        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada - ? WHERE id_cliente = ?`;
-        await db.promise().query(sqlCliente, [monto, id_cliente]);
-
-        // Aquí puedes inyectar ese abono directo a tu tabla de ventas como un ingreso de caja
-        // para que sume a las ganancias del día en tu Dashboard
-        let pago_efectivo = 0, pago_yape = 0, pago_plin = 0;
-        if (metodo === 'efectivo') pago_efectivo = monto;
-        if (metodo === 'yape') pago_yape = monto;
-        if (metodo === 'plin') pago_plin = monto;
-
-        const sqlIngreso = `
-            INSERT INTO ventas (fecha_venta, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, cliente_mesa) 
-            VALUES (NOW(), ?, ?, ?, 0, 'ABONO DE DEUDA - Cliente ID ' + ?)
-        `;
-        await db.promise().query(sqlIngreso, [pago_efectivo, pago_yape, pago_plin, id_cliente]);
-
-        await db.promise().query('COMMIT');
-        res.json({ success: true, message: "Abono guardado." });
-
-    } catch (error) {
-        await db.promise().query('ROLLBACK');
-        console.error("Error al registrar abono:", error);
-        res.status(500).json({ success: false, message: "Error al guardar el abono." });
-    }
-});
-// ==========================================
-// RUTA PARA PASAR UNA CUENTA A FIADO
-// ==========================================
-app.post('/api/cuentas/pasar-a-fiado', async (req, res) => {
-    const { id_cuenta, id_cliente, monto_total } = req.body;
-
-    // Validación por si acaso llega vacío
-    if (!id_cliente || !monto_total || monto_total <= 0) {
-        return res.status(400).json({ success: false, message: "Datos incompletos o monto en cero para fiar." });
-    }
-
-    try {
-        await db.promise().query('BEGIN');
-
-        // 1. Cambiar el estado de la cuenta a 'Fiado' o cerrarla
-        const sqlCuenta = `UPDATE cuentas SET estado = 'Fiado' WHERE id_cuenta = ?`;
-        await db.promise().query(sqlCuenta, [id_cuenta]);
-
-        // 2. Sumar la deuda al cliente en la tabla clientes
-        const sqlCliente = `UPDATE clientes SET deuda_acumulada = deuda_acumulada + ? WHERE id_cliente = ?`;
-        await db.promise().query(sqlCliente, [monto_total, id_cliente]);
-
-        await db.promise().query('COMMIT');
-        res.json({ success: true, message: "Cuenta pasada a crédito exitosamente." });
-
-    } catch (error) {
-        await db.promise().query('ROLLBACK');
-        console.error("Error al pasar a fiado:", error);
-        res.status(500).json({ success: false, message: "Error al registrar el fiado en el servidor." });
-    }
-});
-app.get('/api/clientes', (req, res) => {
-    const sql = "SELECT id_cliente, nombre FROM clientes ORDER BY nombre ASC";
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error("Error al obtener clientes:", err);
-            return res.status(500).json({ success: false, message: "Error al obtener clientes" });
-        }
-        res.json({ success: true, clientes: results });
-    });
-});
-app.post('/api/clientes/nuevo', async (req, res) => {
-    const { nombre, documento, telefono } = req.body;
-    if (!nombre) return res.status(400).json({ success: false, message: "El nombre es obligatorio." });
-    try {
-        await db.promise().query("INSERT INTO clientes (nombre, documento, telefono) VALUES (?, ?, ?)", [nombre, documento, telefono]);
-        res.json({ success: true, message: "Cliente registrado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al registrar cliente." });
-    }
-});
-
-app.put('/api/clientes/editar/:id', async (req, res) => {
-    const { id } = req.params;
-    const { nombre, documento, telefono } = req.body;
-    try {
-        await db.promise().query("UPDATE clientes SET nombre = ?, documento = ?, telefono = ? WHERE id_cliente = ?", [nombre, documento, telefono, id]);
-        res.json({ success: true, message: "Cliente actualizado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al actualizar." });
-    }
-});
-
-app.delete('/api/clientes/eliminar/:id', async (req, res) => {
-    if (req.params.id == 1) return res.status(400).json({ success: false, message: "No puedes eliminar al Cliente General." });
-    try {
-        await db.promise().query("DELETE FROM clientes WHERE id_cliente = ?", [req.params.id]);
-        res.json({ success: true, message: "Cliente eliminado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "No se puede eliminar porque tiene ventas registradas." });
-    }
-});
 // ============================================================
-// MÓDULO CONFIG: CRUD USUARIOS Y ROLES
+// MESAS Y CUENTAS
 // ============================================================
-app.get('/api/roles', async (req, res) => {
-    try {
-        const [roles] = await db.promise().query("SELECT * FROM roles");
-        res.json({ success: true, roles });
-    } catch (error) {
-        res.status(500).json({ success: false });
+async function cuentaAbiertaBloqueada(conn, idCuenta) {
+    const [r] = await conn.query('SELECT * FROM cuentas WHERE id_cuenta = ? FOR UPDATE', [idCuenta]);
+    if (!r.length) throw new ErrorNegocio('La cuenta no existe.', 404);
+    if (r[0].estado !== 'Abierta') {
+        throw new ErrorNegocio(`Esta cuenta ya está en estado "${r[0].estado}". Actualiza la pantalla.`, 409);
     }
-});
+    return r[0];
+}
+async function totalCuenta(conn, idCuenta) {
+    const [s] = await conn.query('SELECT COALESCE(SUM(subtotal), 0) AS t, COUNT(*) AS n FROM cuentas_detalle WHERE id_cuenta = ?', [idCuenta]);
+    return { totalC: centavos(s[0].t), n: Number(s[0].n) };
+}
+async function recalcularCuenta(conn, idCuenta) {
+    const t = await totalCuenta(conn, idCuenta);
+    await conn.query('UPDATE cuentas SET total = ? WHERE id_cuenta = ?', [aDecimal(t.totalC), idCuenta]);
+    return t.totalC;
+}
 
-app.get('/api/usuarios', async (req, res) => {
-    try {
-        const [usuarios] = await db.promise().query(`
-            SELECT u.id_usuario, u.nombre, u.usuario, u.id_rol, r.descripcion as rol 
-            FROM usuarios u INNER JOIN roles r ON u.id_rol = r.id_rol
-        `);
-        res.json({ success: true, usuarios });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al cargar usuarios." });
-    }
-});
-
-app.post('/api/usuarios/nuevo', async (req, res) => {
-    const { nombre, usuario, password, id_rol } = req.body;
-    if (!nombre || !usuario || !password || !id_rol) return res.status(400).json({ success: false, message: "Faltan datos." });
-    try {
-        await db.promise().query("INSERT INTO usuarios (nombre, usuario, password, id_rol) VALUES (?, ?, ?, ?)", [nombre, usuario, password, id_rol]);
-        res.json({ success: true, message: "Usuario creado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error (El usuario ya existe)." });
-    }
-});
-
-app.put('/api/usuarios/editar/:id', async (req, res) => {
-    const { id } = req.params;
-    const { nombre, usuario, password, id_rol } = req.body;
-    try {
-        if (password) {
-            // Si mandó contraseña, la actualizamos
-            await db.promise().query("UPDATE usuarios SET nombre=?, usuario=?, password=?, id_rol=? WHERE id_usuario=?", [nombre, usuario, password, id_rol, id]);
-        } else {
-            // Si la dejó en blanco, conservamos la antigua
-            await db.promise().query("UPDATE usuarios SET nombre=?, usuario=?, id_rol=? WHERE id_usuario=?", [nombre, usuario, id_rol, id]);
-        }
-        res.json({ success: true, message: "Usuario actualizado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Error al actualizar." });
-    }
-});
-
-app.delete('/api/usuarios/eliminar/:id', async (req, res) => {
-    if (req.params.id == 1) return res.status(400).json({ success: false, message: "¡No puedes borrar al Administrador principal!" });
-    try {
-        await db.promise().query("DELETE FROM usuarios WHERE id_usuario = ?", [req.params.id]);
-        res.json({ success: true, message: "Usuario eliminado." });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "No se puede eliminar porque este cajero tiene ventas o cajas registradas. Mejor cámbiale la contraseña." });
-    }
-});
-// ============================================================
-// 17. MÓDULO CUENTAS: GESTIÓN DE MESAS Y FIADOS
-// ============================================================
-
-// Leer las mesas o fiados pendientes
 app.get('/api/cuentas', async (req, res) => {
-    try {
-        const sql = "SELECT * FROM cuentas WHERE estado = 'Abierta' ORDER BY fecha_apertura DESC";
-        const [cuentas] = await db.promise().query(sql);
-        res.json({ success: true, cuentas });
-    } catch (error) {
-        console.error("Error cargando cuentas:", error);
-        res.status(500).json({ success: false, message: "Error al cargar las cuentas abiertas." });
-    }
+    const [cuentas] = await q().query("SELECT * FROM cuentas WHERE estado = 'Abierta' ORDER BY fecha_apertura DESC");
+    res.json({ success: true, cuentas });
 });
-// ==========================================
-// RUTA BLINDADA: GUARDAR, DESCONTAR Y RECALCULAR TOTAL
-// ==========================================
-app.post('/api/cuentas/guardar', (req, res) => {
-    // Ya no necesitamos traer el total_cuenta desde el frontend, la BD lo calculará
-    const { id_cuenta, productos } = req.body;
 
-    if (!id_cuenta || !productos || productos.length === 0) {
-        return res.status(400).json({ success: false, message: 'Faltan datos para guardar.' });
-    }
-
-    let errores = 0;
-    let procesados = 0;
-
-    // 1. Guardamos cada producto nuevo en el detalle y descontamos stock
-    productos.forEach(prod => {
-        const subtotal = prod.cantidad * prod.precio;
-        const sqlInsertDetalle = `INSERT INTO cuentas_detalle (id_cuenta, id_producto, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?)`;
-        
-        db.query(sqlInsertDetalle, [id_cuenta, prod.id_producto, prod.cantidad, prod.precio, subtotal], (errDetalle) => {
-            if (errDetalle) errores++;
-
-            const sqlRestarStock = `UPDATE productos SET stock_unidades = stock_unidades - ? WHERE id_producto = ?`;
-            db.query(sqlRestarStock, [prod.cantidad, prod.id_producto], (errStock) => {
-                if (errStock) errores++;
-                
-                procesados++;
-                
-                // 2. CUANDO TERMINE DE GUARDAR TODO, OBLIGAMOS A LA BD A RECALCULAR EL TOTAL EXACTO
-                if (procesados === productos.length) {
-                    const sqlRecalcular = `
-                        UPDATE cuentas 
-                        SET total = (SELECT COALESCE(SUM(subtotal), 0) FROM cuentas_detalle WHERE id_cuenta = ?) 
-                        WHERE id_cuenta = ?
-                    `;
-                    
-                    db.query(sqlRecalcular, [id_cuenta, id_cuenta], (errRecalcular) => {
-                        if (errRecalcular) console.error("Error recalculando:", errRecalcular);
-                        
-                        if (errores > 0) {
-                            res.json({ success: false, message: 'Se guardó con algunos errores menores.' });
-                        } else {
-                            res.json({ success: true, message: 'Mesa guardada y sincronizada perfectamente.' });
-                        }
-                    });
-                }
-            });
-        });
-    });
-});
-// Crear una nueva mesa o fiado
 app.post('/api/cuentas/nueva', async (req, res) => {
-    // 1. Ahora también recibimos el id_cliente
-    const { tipo, identificador, id_cliente } = req.body; 
-    
-    if (!tipo || !identificador) {
-        return res.status(400).json({ success: false, message: "Faltan datos de la cuenta." });
+    const b = req.body || {};
+    const tipo = String(b.tipo || '').toLowerCase().startsWith('cli') ? 'cliente' : 'mesa';
+    let identificador = limpiarTexto(b.identificador, 100);
+    let idCliente = null;
+
+    if (tipo === 'cliente') {
+        idCliente = entero(b.id_cliente);
+        if (!(idCliente > 1)) throw new ErrorNegocio('Selecciona un cliente registrado.');
+        const [c] = await q().query('SELECT nombre FROM clientes WHERE id_cliente = ?', [idCliente]);
+        if (!c.length) throw new ErrorNegocio('El cliente no existe.');
+        identificador = limpiarTexto(c[0].nombre, 100);
+    }
+    if (!identificador) throw new ErrorNegocio('Faltan datos de la cuenta.');
+
+    const [dup] = tipo === 'cliente'
+        ? await q().query("SELECT id_cuenta FROM cuentas WHERE estado = 'Abierta' AND id_cliente = ? LIMIT 1", [idCliente])
+        : await q().query("SELECT id_cuenta FROM cuentas WHERE estado = 'Abierta' AND tipo = 'mesa' AND LOWER(identificador) = LOWER(?) LIMIT 1", [identificador]);
+    if (dup.length) {
+        throw new ErrorNegocio(tipo === 'cliente' ? 'Ese cliente ya tiene una cuenta abierta.' : `Ya hay una cuenta abierta con el nombre "${identificador}".`, 409);
     }
 
+    const [r] = await q().query('INSERT INTO cuentas (tipo, identificador, id_cliente) VALUES (?, ?, ?)', [tipo, identificador, idCliente]);
+    res.json({ success: true, message: '¡Cuenta aperturada con éxito!', id_cuenta: r.insertId });
+});
+
+app.get('/api/cuentas/:id/detalle', async (req, res) => {
+    const id = idParam(req.params.id, 'La cuenta');
+    const [c] = await q().query('SELECT id_cuenta, tipo, identificador, estado, total FROM cuentas WHERE id_cuenta = ?', [id]);
+    if (!c.length) return res.status(404).json({ success: false, message: 'La cuenta no existe.' });
+    const [detalles] = await q().query(
+        `SELECT cd.id_detalle, cd.id_producto, p.nombre, cd.cantidad, cd.precio_unitario AS precio, cd.subtotal
+         FROM cuentas_detalle cd JOIN productos p ON cd.id_producto = p.id_producto
+         WHERE cd.id_cuenta = ? ORDER BY cd.id_detalle`, [id]);
+    res.json({ success: true, detalles, cuenta: c[0] });
+});
+
+// Agregar productos a la mesa: descuenta stock y recalcula el total en una sola operación
+app.post('/api/cuentas/guardar', async (req, res) => {
+    const b = req.body || {};
+    const idCuenta = idParam(b.id_cuenta, 'La cuenta');
+    const items = normalizarCarrito(b.productos);
+
+    await conTransaccion(db, async (conn) => {
+        await cuentaAbiertaBloqueada(conn, idCuenta);
+        const lineas = await prepararLineas(conn, items);
+        for (const l of lineas) {
+            await conn.query('INSERT INTO cuentas_detalle (id_cuenta, id_producto, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?)',
+                [idCuenta, l.id, l.cant, aDecimal(l.precioC), aDecimal(l.subC)]);
+            await conn.query('UPDATE productos SET stock_unidades = stock_unidades - ? WHERE id_producto = ?', [l.cant, l.id]);
+        }
+        await recalcularCuenta(conn, idCuenta);
+    });
+    res.json({ success: true, message: '¡Mesa guardada y stock actualizado!' });
+});
+
+// NUEVO: corregir un error del mozo (quitar un producto ya guardado). Devuelve el stock y deja huella.
+app.post('/api/cuentas/quitar-item', async (req, res) => {
+    const b = req.body || {};
+    const idDetalle = idParam(b.id_detalle, 'El producto de la cuenta');
+    const motivo = motivoObligatorio(b.motivo);
+
+    const total = await conTransaccion(db, async (conn) => {
+        const [previo] = await conn.query('SELECT id_cuenta FROM cuentas_detalle WHERE id_detalle = ?', [idDetalle]);
+        if (!previo.length) throw new ErrorNegocio('Ese producto ya no está en la cuenta. Actualiza la pantalla.', 404);
+        const cuenta = await cuentaAbiertaBloqueada(conn, previo[0].id_cuenta);
+
+        const [d] = await conn.query(
+            `SELECT cd.id_detalle, cd.id_producto, cd.cantidad, cd.precio_unitario, p.nombre
+             FROM cuentas_detalle cd JOIN productos p ON p.id_producto = cd.id_producto WHERE cd.id_detalle = ? FOR UPDATE`, [idDetalle]);
+        if (!d.length) throw new ErrorNegocio('Ese producto ya no está en la cuenta. Actualiza la pantalla.', 404);
+        const fila = d[0];
+
+        const quitar = (b.cantidad === undefined || b.cantidad === null || b.cantidad === '') ? fila.cantidad : entero(b.cantidad);
+        if (!(quitar > 0) || quitar > fila.cantidad) throw new ErrorNegocio(`La cantidad a quitar debe estar entre 1 y ${fila.cantidad}.`);
+
+        if (quitar === fila.cantidad) {
+            await conn.query('DELETE FROM cuentas_detalle WHERE id_detalle = ?', [idDetalle]);
+        } else {
+            const nueva = fila.cantidad - quitar;
+            await conn.query('UPDATE cuentas_detalle SET cantidad = ?, subtotal = ? WHERE id_detalle = ?',
+                [nueva, aDecimal(centavos(fila.precio_unitario) * nueva), idDetalle]);
+        }
+        await conn.query('UPDATE productos SET stock_unidades = stock_unidades + ? WHERE id_producto = ?', [quitar, fila.id_producto]);
+        const nuevoTotal = await recalcularCuenta(conn, cuenta.id_cuenta);
+        await audit.registrar(conn, req.user.id_usuario,
+            `Quitó ${quitar} x "${fila.nombre}" (S/ ${soles(centavos(fila.precio_unitario) * quitar)}) de "${cuenta.identificador}" (#${cuenta.id_cuenta}). Motivo: ${motivo}`);
+        return nuevoTotal;
+    });
+    res.json({ success: true, message: 'Producto quitado de la cuenta y stock devuelto.', total: aDecimal(total) });
+});
+
+// NUEVO: anular una cuenta completa (devuelve todo el stock). Queda en auditoría.
+app.post('/api/cuentas/anular', async (req, res) => {
+    const b = req.body || {};
+    const idCuenta = idParam(b.id_cuenta, 'La cuenta');
+
+    const resumen = await conTransaccion(db, async (conn) => {
+        const cuenta = await cuentaAbiertaBloqueada(conn, idCuenta);
+        const [items] = await conn.query('SELECT id_producto, cantidad FROM cuentas_detalle WHERE id_cuenta = ?', [idCuenta]);
+        const t = await totalCuenta(conn, idCuenta);
+        const motivo = items.length ? motivoObligatorio(b.motivo) : (limpiarTexto(b.motivo, 150) || 'Cuenta sin consumo');
+        for (const it of items) {
+            await conn.query('UPDATE productos SET stock_unidades = stock_unidades + ? WHERE id_producto = ?', [it.cantidad, it.id_producto]);
+        }
+        await conn.query("UPDATE cuentas SET estado = 'Anulada' WHERE id_cuenta = ?", [idCuenta]);
+        await audit.registrar(conn, req.user.id_usuario,
+            `Anuló la cuenta "${cuenta.identificador}" (#${idCuenta}) de S/ ${soles(t.totalC)} con ${items.length} producto(s) devueltos al stock. Motivo: ${motivo}`);
+        return { n: items.length };
+    });
+    res.json({ success: true, message: resumen.n ? 'Cuenta anulada y stock devuelto.' : 'Cuenta cancelada.' });
+});
+
+app.post('/api/cuentas/cobrar', async (req, res) => {
+    const b = req.body || {};
+    const idCuenta = idParam(b.id_cuenta, 'La cuenta');
+
+    const r = await conTransaccion(db, async (conn) => {
+        // Bloquea la cuenta: si hacen doble clic, el segundo cobro falla (ya no está "Abierta")
+        const cuenta = await cuentaAbiertaBloqueada(conn, idCuenta);
+        const { totalC, n } = await totalCuenta(conn, idCuenta);
+        if (n === 0 || totalC <= 0) throw new ErrorNegocio('No hay nada que cobrar en esta cuenta.');
+        const idCaja = await resolverCaja(conn);
+        const pagos = repartirPagos(pagosDe(b), totalC, { permiteVuelto: false });
+
+        const { id, numero } = await crearVenta(conn, {
+            idCaja, idUsuario: req.user.id_usuario, idCliente: cuenta.id_cliente || 1, totalC, pagos,
+            clienteMesa: cuenta.identificador, prefijo: 'NV-',
+        });
+        await conn.query(
+            `INSERT INTO detalle_ventas (id_venta, id_producto, tipo_empaque, cantidad, precio_unitario, subtotal)
+             SELECT ?, id_producto, 'Unidad', cantidad, precio_unitario, subtotal FROM cuentas_detalle WHERE id_cuenta = ?`, [id, idCuenta]);
+        await conn.query("UPDATE cuentas SET estado = 'Cerrada', total = ? WHERE id_cuenta = ?", [aDecimal(totalC), idCuenta]);
+        return { id, numero };
+    });
+    res.json({ success: true, message: '¡Cobro procesado con éxito!', id_venta: r.id, numero_comprobante: r.numero });
+});
+
+// Solo el administrador puede dar crédito (fiar)
+app.post('/api/cuentas/pasar-a-fiado', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const idCuenta = idParam(b.id_cuenta, 'La cuenta');
+
+    await conTransaccion(db, async (conn) => {
+        const cuenta = await cuentaAbiertaBloqueada(conn, idCuenta);
+        const idCliente = cuenta.id_cliente || entero(b.id_cliente);
+        if (!(idCliente > 1)) throw new ErrorNegocio('Esta cuenta no tiene un cliente registrado a quien fiar.');
+        const [cli] = await conn.query('SELECT nombre FROM clientes WHERE id_cliente = ? FOR UPDATE', [idCliente]);
+        if (!cli.length) throw new ErrorNegocio('El cliente no existe.');
+        const { totalC, n } = await totalCuenta(conn, idCuenta);
+        if (n === 0 || totalC <= 0) throw new ErrorNegocio('Datos incompletos o monto en cero para fiar.');
+
+        await conn.query("UPDATE cuentas SET estado = 'Fiado', total = ? WHERE id_cuenta = ?", [aDecimal(totalC), idCuenta]);
+        await conn.query('UPDATE clientes SET deuda_acumulada = deuda_acumulada + ? WHERE id_cliente = ?', [aDecimal(totalC), idCliente]);
+        await audit.registrar(conn, req.user.id_usuario, `Fió S/ ${soles(totalC)} a "${cli[0].nombre}" (cuenta #${idCuenta})`);
+    });
+    res.json({ success: true, message: 'Cuenta pasada a crédito exitosamente.' });
+});
+
+// ============================================================
+// FIADOS (solo administrador)
+// ============================================================
+app.get('/api/fiados', soloAdmin, async (req, res) => {
+    const [clientes] = await q().query(
+        'SELECT id_cliente, nombre, telefono, deuda_acumulada FROM clientes WHERE deuda_acumulada > 0 ORDER BY deuda_acumulada DESC');
+    res.json({ success: true, clientes });
+});
+
+app.post('/api/fiados/abonar', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const idCliente = idParam(b.id_cliente, 'El cliente');
+    const montoC = dineroObligatorio(b.monto_total, 'Ingresa un monto válido para abonar.');
+    if (montoC <= 0) throw new ErrorNegocio('Ingresa un monto válido para abonar.');
+
+    await conTransaccion(db, async (conn) => {
+        const [cli] = await conn.query('SELECT nombre, deuda_acumulada FROM clientes WHERE id_cliente = ? FOR UPDATE', [idCliente]);
+        if (!cli.length) throw new ErrorNegocio('El cliente no existe.', 404);
+        const deudaC = centavos(cli[0].deuda_acumulada);
+        if (montoC > deudaC) throw new ErrorNegocio(`El abono (S/ ${soles(montoC)}) no puede ser mayor a la deuda actual (S/ ${soles(deudaC)}).`);
+        const idCaja = await resolverCaja(conn);
+        const pagos = repartirPagos(pagosDe(b), montoC, { permiteVuelto: false });
+
+        await conn.query('UPDATE clientes SET deuda_acumulada = deuda_acumulada - ? WHERE id_cliente = ?', [aDecimal(montoC), idCliente]);
+        // El abono entra a la caja como un ingreso (queda registrado en ventas para el arqueo y el reporte)
+        await crearVenta(conn, {
+            idCaja, idUsuario: req.user.id_usuario, idCliente, totalC: montoC, pagos,
+            clienteMesa: limpiarTexto(`ABONO - ${cli[0].nombre}`, 120), prefijo: 'ABONO-',
+        });
+        await audit.registrar(conn, req.user.id_usuario, `Registró abono de S/ ${soles(montoC)} de "${cli[0].nombre}" (deuda restante S/ ${soles(deudaC - montoC)})`);
+    });
+    res.json({ success: true, message: 'Abono guardado.' });
+});
+
+// ============================================================
+// CLIENTES (ver: todos / administrar: admin)
+// ============================================================
+app.get('/api/clientes', async (req, res) => {
+    const cols = req.user.rol === 'Administrador' ? 'id_cliente, nombre, documento, telefono, deuda_acumulada' : 'id_cliente, nombre';
+    const [clientes] = await q().query(`SELECT ${cols} FROM clientes ORDER BY nombre ASC`);
+    res.json({ success: true, clientes });
+});
+app.post('/api/clientes/nuevo', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const nombre = limpiarTexto(b.nombre, 100);
+    if (!nombre) throw new ErrorNegocio('El nombre es obligatorio.');
+    await q().query('INSERT INTO clientes (nombre, documento, telefono) VALUES (?, ?, ?)',
+        [nombre, limpiarTexto(b.documento, 15) || null, limpiarTexto(b.telefono, 20) || null]);
+    res.json({ success: true, message: 'Cliente registrado.' });
+});
+app.put('/api/clientes/editar/:id', soloAdmin, async (req, res) => {
+    const b = req.body || {};
+    const nombre = limpiarTexto(b.nombre, 100);
+    if (!nombre) throw new ErrorNegocio('El nombre es obligatorio.');
+    await q().query('UPDATE clientes SET nombre = ?, documento = ?, telefono = ? WHERE id_cliente = ?',
+        [nombre, limpiarTexto(b.documento, 15) || null, limpiarTexto(b.telefono, 20) || null, idParam(req.params.id)]);
+    res.json({ success: true, message: 'Cliente actualizado.' });
+});
+app.delete('/api/clientes/eliminar/:id', soloAdmin, async (req, res) => {
+    const id = idParam(req.params.id);
+    if (id === 1) throw new ErrorNegocio('No puedes eliminar al Cliente General.');
+    const [c] = await q().query('SELECT deuda_acumulada FROM clientes WHERE id_cliente = ?', [id]);
+    if (c.length && centavos(c[0].deuda_acumulada) > 0) throw new ErrorNegocio('Este cliente tiene una deuda pendiente. Primero cóbrasela.');
     try {
-        // 2. Agregamos id_cliente al INSERT. Si es mesa, entrará como NULL y no hay problema.
-        const sql = "INSERT INTO cuentas (tipo, identificador, id_cliente) VALUES (?, ?, ?)";
-        await db.promise().query(sql, [tipo, identificador, id_cliente || null]);
-        
-        res.json({ success: true, message: "¡Cuenta aperturada con éxito!" });
-    } catch (error) {
-        console.error("Error creando cuenta:", error);
-        res.status(500).json({ success: false, message: "Error al abrir la cuenta." });
+        await q().query('DELETE FROM clientes WHERE id_cliente = ?', [id]);
+    } catch (e) {
+        if (e.errno === 1451 || e.code === 'ER_ROW_IS_REFERENCED_2') throw new ErrorNegocio('No se puede eliminar porque tiene ventas registradas.');
+        throw e;
     }
+    res.json({ success: true, message: 'Cliente eliminado.' });
 });
-// ==========================================
-// RUTA PARA CARGAR EL HISTORIAL DE LA MESA
-// ==========================================
-app.get('/api/cuentas/:id/detalle', (req, res) => {
-    const id_cuenta = req.params.id;
-    
-    // Buscamos qué productos ya están amarrados a esta mesa
-    const sql = `
-        SELECT cd.id_producto, p.nombre, cd.cantidad, cd.precio_unitario as precio, cd.subtotal
-        FROM cuentas_detalle cd
-        JOIN productos p ON cd.id_producto = p.id_producto
-        WHERE cd.id_cuenta = ?
-    `;
-    
-    db.query(sql, [id_cuenta], (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: 'Error base de datos' });
-        res.json({ success: true, detalles: results });
-    });
+
+// ============================================================
+// REPORTES (solo administrador)
+// ============================================================
+app.get('/api/reportes/avanzado', soloAdmin, async (req, res) => {
+    const { inicio, fin } = req.query;
+    if (!fechaISO(inicio) || !fechaISO(fin)) throw new ErrorNegocio('Elige una fecha de inicio y una de fin válidas.');
+    const cliente = limpiarTexto(req.query.cliente, 60);
+
+    let donde = 'WHERE DATE(v.fecha_venta) BETWEEN ? AND ?';
+    const params = [inicio, fin];
+    if (cliente) { donde += ' AND v.cliente_mesa LIKE ?'; params.push(`%${cliente}%`); }
+
+    const [ventas] = await q().query(
+        `SELECT v.*, u.nombre AS cajero FROM ventas v LEFT JOIN usuarios u ON u.id_usuario = v.id_usuario
+         ${donde} ORDER BY v.fecha_venta DESC LIMIT 5000`, params);
+    const [t] = await q().query(
+        `SELECT IFNULL(SUM(v.pago_efectivo), 0) AS ef,
+                IFNULL(SUM(v.pago_yape), 0) + IFNULL(SUM(v.pago_plin), 0) + IFNULL(SUM(v.pago_tarjeta), 0) AS dig
+         FROM ventas v ${donde}`, params);
+    const efectivo = Number(t[0].ef);
+    const digital = Number(t[0].dig);
+    res.json({ success: true, totales: { efectivo, digital, general: efectivo + digital }, ventas });
 });
-app.post('/api/cuentas/cobrar', (req, res) => {
-    // 🔍 Esto va a imprimir en tu terminal negra lo que manda la pantalla
-    console.log("DATOS RECIBIDOS DEL MODAL:", req.body);
 
-    const { id_cuenta, id_caja, monto, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, id_usuario } = req.body;
+// ============================================================
+// USUARIOS Y ROLES (solo administrador)
+// ============================================================
+const RE_USUARIO = /^[\p{L}\p{N}._@-]{3,50}$/u;
 
-    if (!id_cuenta || !id_caja || monto === undefined) {
-        return res.status(400).json({ success: false, message: 'Faltan datos para procesar el pago.' });
+function leerUsuario(b, creando) {
+    const nombre = limpiarTexto(b.nombre, 100);
+    if (!nombre) throw new ErrorNegocio('Falta el nombre del usuario.');
+    const usuario = limpiarTexto(b.usuario, 50);
+    if (!RE_USUARIO.test(usuario)) throw new ErrorNegocio('El usuario debe tener de 3 a 50 caracteres (letras, números, punto, guion), sin espacios.');
+    const idRol = entero(b.id_rol);
+    if (!(idRol > 0)) throw new ErrorNegocio('Selecciona un rol.');
+    let password = null;
+    if (b.password !== undefined && b.password !== null && b.password !== '') {
+        password = String(b.password);
+        if (password.length < 6) throw new ErrorNegocio('La contraseña debe tener al menos 6 caracteres.');
+        if (password.length > 72) throw new ErrorNegocio('La contraseña es demasiado larga (máximo 72 caracteres).');
+    } else if (creando) {
+        throw new ErrorNegocio('Faltan datos.');
     }
+    return { nombre, usuario, idRol, password };
+}
+async function cantidadAdmins(conn, exceptoId = 0) {
+    const [r] = await conn.query(
+        "SELECT COUNT(*) AS c FROM usuarios u INNER JOIN roles r ON r.id_rol = u.id_rol WHERE r.descripcion = 'Administrador' AND u.id_usuario <> ?", [exceptoId]);
+    return Number(r[0].c);
+}
 
-    const numeroComprobante = `MESA-${id_cuenta}-${Date.now().toString().slice(-4)}`;
+app.get('/api/roles', soloAdmin, async (req, res) => {
+    const [roles] = await q().query('SELECT * FROM roles');
+    res.json({ success: true, roles });
+});
 
-    // Nos aseguramos de convertir a número por si llegan como texto o undefined
-    const efec = parseFloat(pago_efectivo) || 0;
-    const yape = parseFloat(pago_yape) || 0;
-    const plin = parseFloat(pago_plin) || 0;
-    const tarj = parseFloat(pago_tarjeta) || 0;
+app.get('/api/usuarios', soloAdmin, async (req, res) => {
+    const [usuarios] = await q().query(
+        'SELECT u.id_usuario, u.nombre, u.usuario, u.id_rol, r.descripcion AS rol FROM usuarios u INNER JOIN roles r ON u.id_rol = r.id_rol');
+    res.json({ success: true, usuarios });
+});
 
-    const sqlVenta = `
-        INSERT INTO ventas (numero_comprobante, id_caja, id_usuario, id_cliente, total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, monto_recibido, vuelto) 
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0.00)
-    `;
+app.post('/api/usuarios/nuevo', soloAdmin, async (req, res) => {
+    const u = leerUsuario(req.body || {}, true);
+    const [rol] = await q().query('SELECT id_rol FROM roles WHERE id_rol = ?', [u.idRol]);
+    if (!rol.length) throw new ErrorNegocio('El rol no existe.');
+    try {
+        await q().query('INSERT INTO usuarios (nombre, usuario, password, id_rol) VALUES (?, ?, ?, ?)',
+            [u.nombre, u.usuario, await hashear(u.password), u.idRol]);
+    } catch (e) {
+        if (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) throw new ErrorNegocio('Error (El usuario ya existe).', 409);
+        throw e;
+    }
+    await audit.registrar(db, req.user.id_usuario, `Creó el usuario "${u.usuario}" (${u.nombre})`);
+    res.json({ success: true, message: 'Usuario creado.' });
+});
 
-    db.query(sqlVenta, [numeroComprobante, id_caja, id_usuario || 1, monto, efec, yape, plin, tarj, monto], (errVenta, resultadoVenta) => {
-        if (errVenta) {
-            console.error("Error al registrar venta:", errVenta);
-            return res.status(500).json({ success: false, message: 'Error al registrar la venta.' });
+app.put('/api/usuarios/editar/:id', soloAdmin, async (req, res) => {
+    const id = idParam(req.params.id, 'El usuario');
+    const u = leerUsuario(req.body || {}, false);
+
+    await conTransaccion(db, async (conn) => {
+        const [actual] = await conn.query(
+            'SELECT u.id_usuario, r.descripcion AS rol FROM usuarios u INNER JOIN roles r ON r.id_rol = u.id_rol WHERE u.id_usuario = ? FOR UPDATE', [id]);
+        if (!actual.length) throw new ErrorNegocio('El usuario no existe.', 404);
+        const [rolNuevo] = await conn.query('SELECT descripcion FROM roles WHERE id_rol = ?', [u.idRol]);
+        if (!rolNuevo.length) throw new ErrorNegocio('El rol no existe.');
+        // Nunca puede quedar el sistema sin administrador
+        if (actual[0].rol === 'Administrador' && rolNuevo[0].descripcion !== 'Administrador' && (await cantidadAdmins(conn, id)) === 0) {
+            throw new ErrorNegocio('No puedes quitar el rol de Administrador al único administrador que existe.');
         }
-
-        const idVentaGenerada = resultadoVenta.insertId;
-
-        const sqlCopiarDetalle = `
-            INSERT INTO detalle_ventas (id_venta, id_producto, tipo_empaque, cantidad, precio_unitario, subtotal)
-            SELECT ?, id_producto, 'Unidad', cantidad, precio_unitario, subtotal 
-            FROM cuentas_detalle 
-            WHERE id_cuenta = ?
-        `;
-
-        db.query(sqlCopiarDetalle, [idVentaGenerada, id_cuenta], (errDetalle) => {
-            if (errDetalle) {
-                console.error("Error al copiar detalle:", errDetalle);
-                return res.status(500).json({ success: false, message: 'Venta creada pero falló el detalle.' });
+        try {
+            if (u.password) {
+                await conn.query('UPDATE usuarios SET nombre = ?, usuario = ?, password = ?, id_rol = ? WHERE id_usuario = ?',
+                    [u.nombre, u.usuario, await hashear(u.password), u.idRol, id]);
+            } else {
+                await conn.query('UPDATE usuarios SET nombre = ?, usuario = ?, id_rol = ? WHERE id_usuario = ?', [u.nombre, u.usuario, u.idRol, id]);
             }
+        } catch (e) {
+            if (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) throw new ErrorNegocio('Ese nombre de usuario ya existe.', 409);
+            throw e;
+        }
+        await audit.registrar(conn, req.user.id_usuario, `Editó el usuario "${u.usuario}"${u.password ? ' (cambió su contraseña)' : ''}`);
+    });
+    olvidar(id);
+    res.json({ success: true, message: 'Usuario actualizado.' });
+});
 
-            const sqlCerrarMesa = `UPDATE cuentas SET estado = 'Cerrada' WHERE id_cuenta = ?`;
-            db.query(sqlCerrarMesa, [id_cuenta], (errCerrar) => {
-                if (errCerrar) console.error("Error cerrando cuenta:", errCerrar);
+app.delete('/api/usuarios/eliminar/:id', soloAdmin, async (req, res) => {
+    const id = idParam(req.params.id, 'El usuario');
+    if (id === 1) throw new ErrorNegocio('¡No puedes borrar al Administrador principal!');
+    if (id === req.user.id_usuario) throw new ErrorNegocio('No puedes eliminar tu propio usuario.');
+    const [u] = await q().query('SELECT usuario FROM usuarios WHERE id_usuario = ?', [id]);
+    try {
+        await q().query('DELETE FROM usuarios WHERE id_usuario = ?', [id]);
+    } catch (e) {
+        if (e.errno === 1451 || e.code === 'ER_ROW_IS_REFERENCED_2') {
+            throw new ErrorNegocio('No se puede eliminar porque este usuario tiene ventas o cajas registradas. Mejor cámbiale la contraseña.');
+        }
+        throw e;
+    }
+    olvidar(id);
+    await audit.registrar(db, req.user.id_usuario, `Eliminó el usuario "${u.length ? u[0].usuario : id}"`);
+    res.json({ success: true, message: 'Usuario eliminado.' });
+});
 
-                const sqlActualizarCaja = `
-                    UPDATE caja 
-                    SET total_efectivo = total_efectivo + ?, 
-                        total_yape = total_yape + ?, 
-                        total_plin = total_plin + ?, 
-                        total_tarjeta = total_tarjeta + ? 
-                    WHERE id_caja = ?
-                `;
-                
-                db.query(sqlActualizarCaja, [efec, yape, plin, tarj, id_caja], (errCaja) => {
-                    if (errCaja) console.error("Error actualizando caja:", errCaja);
+// ============================================================
+// AUDITORÍA Y RESPALDOS (solo administrador)
+// ============================================================
+app.get('/api/auditoria', soloAdmin, async (req, res) => {
+    const limite = Math.min(Math.max(entero(req.query.limite) || 200, 1), 500);
+    const texto = limpiarTexto(req.query.texto, 60);
+    const params = [];
+    let donde = '';
+    if (texto) { donde = 'WHERE l.accion LIKE ? OR u.nombre LIKE ?'; params.push(`%${texto}%`, `%${texto}%`); }
+    const [logs] = await q().query(
+        `SELECT l.id_log, l.fecha, u.nombre AS usuario, l.accion FROM logs_auditoria l
+         LEFT JOIN usuarios u ON u.id_usuario = l.id_usuario ${donde} ORDER BY l.id_log DESC LIMIT ${limite}`, params);
+    res.json({ success: true, logs });
+});
 
-                    res.json({ success: true, message: '¡Cobro procesado con éxito!' });
-                });
-            });
+app.get('/api/respaldo/lista', soloAdmin, (req, res) => {
+    res.json({ success: true, respaldos: respaldo.listar() });
+});
+app.post('/api/respaldo/ahora', soloAdmin, async (req, res) => {
+    let r;
+    try { r = await respaldo.hacerRespaldo(); } catch (e) { throw new ErrorNegocio(e.message, 500); }
+    await audit.registrar(db, req.user.id_usuario, `Hizo un respaldo manual (${r.archivo})`);
+    res.json({ success: true, message: 'Respaldo creado correctamente.', archivo: r.archivo, bytes: r.bytes, copiadoA: r.copiadoA });
+});
+app.get('/api/respaldo/descargar/:archivo', soloAdmin, (req, res) => {
+    const ruta = respaldo.rutaSegura(req.params.archivo);
+    if (!ruta) return res.status(404).json({ success: false, message: 'Respaldo no encontrado.' });
+    res.download(ruta, req.params.archivo);
+});
+
+// ============================================================
+// ERRORES
+// ============================================================
+app.use('/api', (req, res) => res.status(404).json({ success: false, message: 'Ruta no encontrada.' }));
+
+const ERRORES_CONEXION = ['ECONNREFUSED', 'ETIMEDOUT', 'PROTOCOL_CONNECTION_LOST', 'ECONNRESET', 'EHOSTUNREACH', 'ER_CON_COUNT_ERROR'];
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    if (err instanceof ErrorNegocio) return res.status(err.status).json({ success: false, message: err.message });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ success: false, message: 'Datos inválidos.' });
+    if (err.type === 'entity.too.large') return res.status(413).json({ success: false, message: 'Los datos enviados son demasiado grandes.' });
+    log.error(`${req.method} ${req.originalUrl}`, err);
+    if (ERRORES_CONEXION.includes(err.code)) {
+        return res.status(503).json({ success: false, message: 'No hay conexión con la base de datos. Verifica que MySQL (XAMPP) esté encendido.' });
+    }
+    res.status(500).json({ success: false, message: 'Ocurrió un error interno. Si se repite, avisa a soporte.' });
+});
+
+// ============================================================
+// ARRANQUE
+// ============================================================
+function direccionesLAN() {
+    const out = [];
+    for (const lista of Object.values(os.networkInterfaces())) {
+        for (const i of lista || []) if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+    }
+    return out;
+}
+
+async function iniciar() {
+    log.limpiarViejos();
+    await esperarBaseDeDatos(db, log);
+    await migrar(db, log);
+    return new Promise((resolve, reject) => {
+        const server = app.listen(config.PORT, config.HOST, () => {
+            log.info('==============================================');
+            log.info(' ERP LICORERÍA POS - servidor encendido');
+            log.info(`  En esta computadora:  http://localhost:${config.PORT}`);
+            direccionesLAN().forEach((ip) => log.info(`  Desde el celular/otra PC (mismo WiFi):  http://${ip}:${config.PORT}`));
+            log.info('==============================================');
+            resolve(server);
+        });
+        server.on('error', (e) => {
+            if (e.code === 'EADDRINUSE') log.error(`El puerto ${config.PORT} ya está en uso. ¿El sistema ya está abierto en otra ventana?`);
+            reject(e);
         });
     });
-});
-// ==========================================
-// RUTA DE COBRO OFICIAL CON SOPORTE PARA PAGO MIXTO
-// ==========================================
-app.post('/api/cuentas/cobrar', (req, res) => {
-    const { id_cuenta, id_caja, monto, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, id_usuario } = req.body;
+}
 
-    if (!id_cuenta || !id_caja || monto === undefined) {
-        return res.status(400).json({ success: false, message: 'Faltan datos para procesar el pago.' });
-    }
+if (require.main === module) {
+    process.on('unhandledRejection', (e) => log.error('Promesa sin manejar:', e));
+    process.on('uncaughtException', (e) => { log.error('Error fatal:', e); process.exit(1); });
+    iniciar().catch((e) => { log.error('No se pudo iniciar el sistema:', e.message); process.exit(1); });
+}
 
-    const numeroComprobante = `MESA-${id_cuenta}-${Date.now().toString().slice(-4)}`;
-
-    // 1. Insertar en la tabla 'ventas' con sus respectivos montos desglosados
-    const sqlVenta = `
-        INSERT INTO ventas (numero_comprobante, id_caja, id_usuario, id_cliente, total, pago_efectivo, pago_yape, pago_plin, pago_tarjeta, monto_recibido, vuelto) 
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0.00)
-    `;
-
-    db.query(sqlVenta, [numeroComprobante, id_caja, id_usuario || 1, monto, pago_efectivo || 0, pago_yape || 0, pago_plin || 0, pago_tarjeta || 0, monto], (errVenta, resultadoVenta) => {
-        if (errVenta) {
-            console.error("Error al registrar venta:", errVenta);
-            return res.status(500).json({ success: false, message: 'Error al registrar la venta.' });
-        }
-
-        const idVentaGenerada = resultadoVenta.insertId;
-
-        // 2. Copiar los productos de 'cuentas_detalle' a 'detalle_ventas'
-        const sqlCopiarDetalle = `
-            INSERT INTO detalle_ventas (id_venta, id_producto, tipo_empaque, cantidad, precio_unitario, subtotal)
-            SELECT ?, id_producto, 'Unidad', cantidad, precio_unitario, subtotal 
-            FROM cuentas_detalle 
-            WHERE id_cuenta = ?
-        `;
-
-        db.query(sqlCopiarDetalle, [idVentaGenerada, id_cuenta], (errDetalle) => {
-            if (errDetalle) {
-                console.error("Error al copiar detalle:", errDetalle);
-                return res.status(500).json({ success: false, message: 'Venta creada pero falló el detalle.' });
-            }
-
-            // 3. Cerrar la mesa en la tabla 'cuentas'
-            const sqlCerrarMesa = `UPDATE cuentas SET estado = 'Cerrada' WHERE id_cuenta = ?`;
-            db.query(sqlCerrarMesa, [id_cuenta], (errCerrar) => {
-                if (errCerrar) console.error("Error cerrando cuenta:", errCerrar);
-
-                // 4. Sumar cada monto en su respectiva columna acumuladora de la tabla 'caja'
-                const sqlActualizarCaja = `
-                    UPDATE caja 
-                    SET total_efectivo = total_efectivo + ?, 
-                        total_yape = total_yape + ?, 
-                        total_plin = total_plin + ?, 
-                        total_tarjeta = total_tarjeta + ? 
-                    WHERE id_caja = ?
-                `;
-                
-                db.query(sqlActualizarCaja, [pago_efectivo || 0, pago_yape || 0, pago_plin || 0, pago_tarjeta || 0, id_caja], (errCaja) => {
-                    if (errCaja) console.error("Error actualizando caja:", errCaja);
-
-                    res.json({ success: true, message: '¡Cobro mixto procesado, ventas y caja cuadrados con éxito!' });
-                });
-            });
-        });
-    });
-});
-// Lanzar el servidor
-const PORT = 3000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor de la Licorería corriendo en http://localhost:${PORT}`);
-});
+module.exports = { app, iniciar };

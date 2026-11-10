@@ -1,14 +1,19 @@
 {
-  "name": "backend",
-  "version": "1.0.0",
-  "description": "",
+  "name": "licoreria-pos-backend",
+  "version": "2.0.0",
+  "description": "ERP/POS para licorerías y bares (Node.js + Express + MySQL)",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "respaldo": "node scripts/respaldo.js",
+    "probar-conexion": "node scripts/probar_conexion.js",
+    "cambiar-password": "node scripts/cambiar_password.js",
+    "descargar-librerias": "node scripts/descargar_librerias.js",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "type": "commonjs",
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -17,5 +22,9 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.22.3"
-  }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
 }

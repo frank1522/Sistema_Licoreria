@@ -22,12 +22,12 @@
         <form id="formLogin">
     <div class="input-group-custom text-start">
         <label for="username" class="form-label">Usuario</label>
-        <input type="text" class="form-control-custom" id="username" placeholder="Ingrese su usuario" required>
+        <input type="text" class="form-control-custom" id="username" placeholder="Ingrese su usuario" autocomplete="username" required>
     </div>
     
     <div class="input-group-custom text-start">
         <label for="password" class="form-label">Contraseña</label>
-        <input type="password" class="form-control-custom" id="password" placeholder="••••••••" required>
+        <input type="password" class="form-control-custom" id="password" placeholder="••••••••" autocomplete="current-password" required>
     </div>
 
     <div class="form-check-custom">
@@ -42,48 +42,51 @@
     </div>
 
     <script>
-      document.getElementById('formLogin').addEventListener('submit', async (e) => {
-        e.preventDefault();
+        // Si te sacaron por sesión vencida, se avisa una sola vez
+        const avisoSesion = sessionStorage.getItem('aviso_login');
+        if (avisoSesion) { sessionStorage.removeItem('aviso_login'); setTimeout(() => alert(avisoSesion), 150); }
 
-        // 1. Capturamos los valores reales usando los IDs originales de la plantilla
-        const txtUsuario = document.getElementById('username').value;
-        const txtPassword = document.getElementById('password').value; 
+        document.getElementById('formLogin').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const boton = e.target.querySelector('button[type="submit"]');
+            const txtUsuario = document.getElementById('username').value.trim();
+            const txtPassword = document.getElementById('password').value;
 
-        try {
-            // 2. Enviamos la petición con las llaves exactas que espera el backend
-            const res = await fetch('/api/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    usuario: txtUsuario, 
-                    contrasena: txtPassword  // Viaja limpio como 'contrasena' sin eñes en el JSON
-                })
-            });
+            boton.disabled = true;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ usuario: txtUsuario, contrasena: txtPassword })
+                });
+                const data = await res.json().catch(() => ({}));
 
-            const data = await res.json();
+                if (data.success) {
+                    // Sesión nueva: se limpia cualquier dato de un usuario anterior
+                    localStorage.clear();
+                    localStorage.setItem('token', data.token);
+                    localStorage.setItem('id_usuario', data.usuario.id_usuario);
+                    localStorage.setItem('rol', data.usuario.rol);
+                    localStorage.setItem('nombre_usuario', data.usuario.nombre);
 
-            if (data.success) {
-                alert(`¡Bienvenido de nuevo, ${data.usuario.nombre}!`);
-                
-                // Guardamos en la memoria del navegador (LocalStorage)
-                localStorage.setItem('id_usuario', data.usuario.id_usuario);
-                localStorage.setItem('rol', data.usuario.rol);
-                localStorage.setItem('nombre_usuario', data.usuario.nombre);
+                    if (data.aviso) alert('⚠️ ' + data.aviso);
 
-                // Redirección inteligente según el rol de tu BD
-                if (data.usuario.rol === 'Administrador' || data.usuario.rol === 'Cajero') {
-                    window.location.href = 'caja.html'; 
+                    // Redirección según el rol
+                    if (data.usuario.rol === 'Administrador' || data.usuario.rol === 'Cajero') {
+                        window.location.href = 'caja.html';
+                    } else {
+                        window.location.href = 'index.html';
+                    }
                 } else {
-                    window.location.href = 'index.html'; 
+                    alert(data.message || 'No se pudo iniciar sesión.');
                 }
-            } else {
-                alert("Error: " + data.message);
+            } catch (err) {
+                console.error('Error al conectar con el servidor:', err);
+                alert('No se pudo conectar con el servidor. Verifica que el sistema esté encendido y que estés en la misma red WiFi.');
+            } finally {
+                boton.disabled = false;
             }
-        } catch (err) {
-            console.error("Error al conectar con el servidor:", err);
-            alert("No se pudo iniciar sesión, contacte a soporte.");
-        }
-    });
+        });
     </script>
 </body>
 </html>

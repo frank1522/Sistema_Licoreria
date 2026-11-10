@@ -1,19 +1,25 @@
+// ============================================================
+// CONEXIÓN A MYSQL / MARIADB (con pool de conexiones)
+// Un pool reconecta solo: si MySQL se reinicia o la conexión se
+// duerme de noche, el sistema sigue funcionando sin reiniciar Node.
+// Las credenciales salen de backend/.env (ver .env.example)
+// ============================================================
 const mysql = require('mysql2');
+const config = require('./lib/config');
 
-// Configuración de la conexión a MySQL de XAMPP
-const connection = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',    
-  password: '',     
-  database: 'licoreria_db'
+const pool = mysql.createPool({
+    host: config.DB.host,
+    port: config.DB.port,
+    user: config.DB.user,
+    password: config.DB.password,
+    database: config.DB.database,
+    charset: 'utf8mb4',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    connectTimeout: 10000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
 });
 
-connection.connect((err) => {
-  if (err) {
-    console.error('Error conectando a la base de datos: ' + err.stack);
-    return;
-  }
-  console.log('Conectado a la base de datos de XAMPP con el ID ' + connection.threadId);
-});
-
-module.exports = connection;
+module.exports = pool;

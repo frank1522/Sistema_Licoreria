@@ -1,0 +1,13 @@
+# Normaliza los saltos de línea al guardar en Git
+* text=auto
+
+# Los .bat DEBEN tener saltos de línea de Windows (CRLF) o pueden fallar en Windows,
+# incluso cuando se descarga el ZIP desde GitHub.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Archivos que nunca se deben convertir
+*.zip binary
+*.png binary
+*.jpg binary
+*.woff2 binary

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+    <script src="auth.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Control de Fiados</title>
@@ -127,11 +128,11 @@
                     data.clientes.forEach(c => {
                         tbody.innerHTML += `
                             <tr>
-                                <td class="fw-bold text-dark">${c.nombre}</td>
-                                <td class="text-muted">${c.telefono || '-'}</td>
+                                <td class="fw-bold text-dark">${esc(c.nombre)}</td>
+                                <td class="text-muted">${esc(c.telefono || '-')}</td>
                                 <td class="text-danger fw-bold fs-5">S/ ${Number(c.deuda_acumulada).toFixed(2)}</td>
                                 <td class="text-center">
-                                    <button class="btn btn-sm btn-success fw-bold px-3" onclick="abrirModalAbono(${c.id_cliente}, '${c.nombre}', ${c.deuda_acumulada})">
+                                    <button class="btn btn-sm btn-success fw-bold px-3" data-nombre="${esc(c.nombre)}" onclick="abrirModalAbono(${c.id_cliente}, this.dataset.nombre, ${c.deuda_acumulada})">
                                         Cobrar
                                     </button>
                                 </td>
@@ -180,8 +181,13 @@
             const metodoPago = document.getElementById('metodoPagoAbono').value;
             const deudaActual = parseFloat(document.getElementById('abonoDeudaActual').textContent);
             
-            const idCajaActiva = localStorage.getItem('id_caja_activa') || 1; 
+            const idCajaActiva = localStorage.getItem('id_caja_activa');
             const idUsuarioActivo = localStorage.getItem('id_usuario') || 1;
+
+            if (!idCajaActiva) {
+                alert("Error: No hay una caja abierta. Abre la caja primero para registrar el abono.");
+                return;
+            }
 
             if (!montoAbono || montoAbono <= 0) {
                 alert("Ingresa un monto válido para abonar.");

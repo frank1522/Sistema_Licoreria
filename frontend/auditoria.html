@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <script src="auth.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ERP Licorería - Auditoría y Respaldos</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .navbar-custom { background-color: #006D5B !important; border-bottom: 3px solid #D4AF37; }
+        body { font-family: 'Poppins', sans-serif; background-color: #f4f6f9; }
+        .text-gold { color: #D4AF37 !important; }
+        .text-teal { color: #006D5B; }
+        .btn-teal { background-color: #006D5B; color: white; transition: 0.3s; }
+        .btn-teal:hover { background-color: #005043; color: white; }
+        .tabla-scroll { max-height: 480px; overflow-y: auto; }
+        .tabla-scroll table { display: table; }
+        .accion { word-break: break-word; }
+        .etiqueta { font-size: 0.72rem; }
+    </style>
+</head>
+<body>
+    <div id="menu-container"></div>
+
+    <div class="container mt-4 mb-5">
+        <div class="mb-4">
+            <h3 class="fw-bold m-0 text-teal">🛡️ Auditoría y respaldos</h3>
+            <p class="text-muted m-0">Quién hizo qué en el sistema, y copias de seguridad de tu información.</p>
+        </div>
+
+        <div class="row g-4">
+            <!-- ACTIVIDAD -->
+            <div class="col-12 col-lg-7">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <h5 class="fw-bold text-teal mb-3">🕵️ Actividad reciente</h5>
+                        <div class="input-group mb-3">
+                            <input type="text" id="filtroTexto" class="form-control" placeholder="Buscar: anuló, quitó, fió, ajuste, nombre de usuario...">
+                            <button class="btn btn-teal fw-bold" id="btnFiltrar">Buscar</button>
+                        </div>
+                        <div class="tabla-scroll">
+                            <table class="table table-sm table-hover align-middle">
+                                <thead class="table-light" style="position: sticky; top: 0;">
+                                    <tr><th style="width: 24%;">Fecha</th><th style="width: 18%;">Usuario</th><th>Acción</th></tr>
+                                </thead>
+                                <tbody id="tablaLogs"><tr><td colspan="3" class="text-center text-muted py-4">Cargando...</td></tr></tbody>
+                            </table>
+                        </div>
+                        <small class="text-muted">Se muestran las últimas 200 acciones: aperturas y cierres de caja, gastos, anulaciones, productos quitados de mesas, fiados, abonos, compras, ajustes de inventario y cambios de precios o usuarios.</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RESPALDOS -->
+            <div class="col-12 col-lg-5">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <h5 class="fw-bold text-teal mb-2">💾 Respaldos</h5>
+                        <p class="text-muted small mb-3">Una copia de toda tu información (ventas, inventario, clientes). Si la computadora se daña, con este archivo se recupera todo. Se recomienda guardar una copia fuera de la PC (USB o correo).</p>
+                        <button class="btn btn-teal fw-bold w-100 mb-3" id="btnRespaldo">💾 Hacer respaldo ahora</button>
+                        <div class="tabla-scroll" style="max-height: 340px;">
+                            <table class="table table-sm align-middle">
+                                <thead class="table-light"><tr><th>Archivo</th><th class="text-end">Tamaño</th><th></th></tr></thead>
+                                <tbody id="tablaRespaldos"><tr><td colspan="3" class="text-center text-muted py-3">Cargando...</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="menu.js"></script>
+    <script>
+        const fechaLocal = (v) => v ? new Date(v).toLocaleString('es-PE', { dateStyle: 'short', timeStyle: 'short' }) : '-';
+        const kb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+
+        function colorAccion(texto) {
+            const t = texto.toLowerCase();
+            if (t.startsWith('anuló') || t.startsWith('quitó')) return 'text-danger';
+            if (t.startsWith('fió') || t.includes('ajuste')) return 'text-warning-emphasis';
+            if (t.startsWith('cambió precios')) return 'text-primary';
+            return '';
+        }
+
+        async function cargarLogs() {
+            const tbody = document.getElementById('tablaLogs');
+            const texto = document.getElementById('filtroTexto').value.trim();
+            try {
+                const res = await fetch('/api/auditoria?limite=200&texto=' + encodeURIComponent(texto));
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message || 'Error');
+                if (data.logs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">No hay actividad registrada con ese filtro.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.logs.map(l => `
+                    <tr>
+                        <td class="text-muted small">${esc(fechaLocal(l.fecha))}</td>
+                        <td class="fw-semibold">${esc(l.usuario || '-')}</td>
+                        <td class="accion ${colorAccion(l.accion)}">${esc(l.accion)}</td>
+                    </tr>`).join('');
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="3" class="text-center text-danger py-4">⚠️ ${esc(e.message)}</td></tr>`;
+            }
+        }
+
+        async function cargarRespaldos() {
+            const tbody = document.getElementById('tablaRespaldos');
+            try {
+                const res = await fetch('/api/respaldo/lista');
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message || 'Error');
+                if (data.respaldos.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">Aún no hay respaldos. Haz el primero ahora.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.respaldos.map(r => `
+                    <tr>
+                        <td><div class="small fw-semibold">${esc(r.archivo)}</div><div class="text-muted etiqueta">${esc(fechaLocal(r.fecha))}</div></td>
+                        <td class="text-end small">${kb(r.bytes)}</td>
+                        <td class="text-end"><button class="btn btn-sm btn-outline-secondary" data-archivo="${esc(r.archivo)}" onclick="descargar(this.dataset.archivo)">⬇️</button></td>
+                    </tr>`).join('');
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="3" class="text-center text-danger py-3">⚠️ ${esc(e.message)}</td></tr>`;
+            }
+        }
+
+        async function hacerRespaldo() {
+            const btn = document.getElementById('btnRespaldo');
+            btn.disabled = true; btn.textContent = '⏳ Creando respaldo...';
+            try {
+                const res = await fetch('/api/respaldo/ahora', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const data = await res.json();
+                if (data.success) {
+                    alert('✅ Respaldo creado: ' + data.archivo + (data.copiadoA ? '\nCopia extra guardada en: ' + data.copiadoA : ''));
+                } else {
+                    alert('⚠️ No se pudo hacer el respaldo:\n' + data.message);
+                }
+            } catch (e) {
+                alert('Error de conexión con el servidor.');
+            } finally {
+                btn.disabled = false; btn.textContent = '💾 Hacer respaldo ahora';
+                cargarRespaldos(); cargarLogs();
+            }
+        }
+
+        // La descarga lleva el token de sesión, por eso se hace con fetch y no con un enlace normal
+        async function descargar(archivo) {
+            try {
+                const res = await fetch('/api/respaldo/descargar/' + encodeURIComponent(archivo));
+                if (!res.ok) throw new Error('No se pudo descargar');
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = archivo;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+            } catch (e) {
+                alert('No se pudo descargar el respaldo.');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('btnFiltrar').addEventListener('click', cargarLogs);
+            document.getElementById('filtroTexto').addEventListener('keydown', (e) => { if (e.key === 'Enter') cargarLogs(); });
+            document.getElementById('btnRespaldo').addEventListener('click', hacerRespaldo);
+            cargarLogs();
+            cargarRespaldos();
+        });
+    </script>
+</body>
+</html>

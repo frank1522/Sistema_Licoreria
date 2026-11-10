@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+    <script src="auth.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Cuentas Abiertas</title>
@@ -120,13 +121,13 @@
                         const icono = esMesa ? '🪑' : '👤';
                         
                         // Botón de fiado dinámico (solo si es cliente)
-                        const btnFiado = esMesa ? '' : `<button class="btn btn-warning btn-sm w-100 fw-bold text-dark mt-2" onclick="pasarAFiado(${cuenta.id_cuenta}, ${cuenta.id_cliente}, ${cuenta.total})">📝 Pasar a Fiado</button>`;
+                        const btnFiado = (esMesa || !Sesion.esAdmin()) ? '' : `<button class="btn btn-warning btn-sm w-100 fw-bold text-dark mt-2" onclick="pasarAFiado(${cuenta.id_cuenta}, ${cuenta.id_cliente}, ${cuenta.total})">📝 Pasar a Fiado</button>`;
                         
                         contenedor.innerHTML += `
                             <div class="col-12 col-md-6 col-lg-3">
                                 <div class="card-cuenta border border-light d-flex flex-column">
                                     <div class="cuenta-header ${claseHeader}">
-                                        <span>${icono} ${cuenta.identificador}</span>
+                                        <span>${icono} ${esc(cuenta.identificador)}</span>
                                     </div>
                                     <div class="cuenta-body text-center d-flex flex-column flex-grow-1 justify-content-between">
                                         <div class="mb-3">
@@ -141,6 +142,9 @@
                                                 💰 Cobrar
                                             </button>
                                             ${btnFiado}
+                                            <button class="btn btn-outline-danger btn-sm w-100 fw-bold mt-2" onclick="anularCuenta(${cuenta.id_cuenta}, ${parseFloat(cuenta.total || 0)})">
+                                                🗑️ Anular
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -162,7 +166,7 @@
                 contenedor.innerHTML = `
                     <div class="col-12">
                         <div class="alert alert-danger fw-bold text-center p-4 shadow-sm">
-                            ⚠️ Error: ${error.message}<br>
+                            ⚠️ Error: ${esc(error.message)}<br>
                             <span class="text-muted fw-normal" style="font-size: 0.9rem;">(Revisa la pantallita negra de tu servidor para ver si MySQL está corriendo)</span>
                         </div>
                     </div>
@@ -248,10 +252,39 @@
             }
         }
 
-        // 5. COBRAR CUENTA (MARCO DE REFERENCIA)
+        // 5. COBRAR: abre la cuenta con la ventana de pago lista
         function cobrarCuenta(idCuenta) {
-            // Aquí llamarías a tu modal de cobro o redirección a pagos
-            alert('Falta integrar el modal de cobro directo para la cuenta ID: ' + idCuenta);
+            window.location.href = `detalle_cuenta.html?id=${idCuenta}&cobrar=1`;
+        }
+
+        // 6. ANULAR / CANCELAR UNA CUENTA (devuelve el stock y queda registrado)
+        async function anularCuenta(idCuenta, total) {
+            let motivo = '';
+            if (total > 0) {
+                const dato = prompt(`Esta cuenta tiene consumo de S/ ${total.toFixed(2)}.\nAl anularla, el stock vuelve al inventario.\n\nEscribe el MOTIVO (queda registrado):`);
+                if (dato === null) return;
+                motivo = dato.trim();
+                if (motivo.length < 3) return alert('⚠️ Debes escribir un motivo (mínimo 3 letras).');
+            } else if (!confirm('¿Cancelar esta cuenta vacía?')) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/cuentas/anular', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id_cuenta: idCuenta, motivo })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(data.message);
+                    cargarCuentasAbiertas();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (e) {
+                console.error('Error al anular:', e);
+                alert('Error de conexión con el servidor.');
+            }
         }
 
         let listaClientesGlobal = [];
@@ -285,7 +318,7 @@
                 
                 listaClientesGlobal.forEach(c => {
                     // AQUÍ ESTABA EL ERROR: Cambiado value="${c.nombre}" por value="${c.id_cliente}"
-                    opcionesHtml += `<option value="${c.id_cliente}">${c.nombre}</option>`;
+                    opcionesHtml += `<option value="${c.id_cliente}">${esc(c.nombre)}</option>`;
                 });
                 opcionesHtml += `</select>`;
                 

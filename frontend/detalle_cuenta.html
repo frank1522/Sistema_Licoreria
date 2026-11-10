@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+    <script src="auth.js"></script>
     <meta charset="UTF-8">
    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Detalle de la Mesa - ERP Licorería</title>
@@ -21,7 +22,10 @@
         
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h3 class="fw-bold text-success m-0" id="tituloMesa">Cargando Mesa...</h3>
-            <span class="badge bg-primary fs-6">Estado: Abierta</span>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-primary fs-6">Estado: Abierta</span>
+                <button class="btn btn-outline-danger btn-sm fw-bold" onclick="anularCuenta()">🗑️ Anular cuenta</button>
+            </div>
         </div>
 
         <div class="row g-4">
@@ -129,37 +133,54 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <!-- SCRIPT CON AGRUPADOR Y LÓGICA DE MESA -->
    <script>
-
         const urlParams = new URLSearchParams(window.location.search);
         const idCuenta = urlParams.get('id');
-        
-        let carritoMesa = [];         // Los tragos NUEVOS que agregas ahorita
-        let detallesGuardados = [];   // Los tragos VIEJOS que ya estaban en la base de datos
-        
-        let totalNuevo = 0;           // Plata de lo nuevo
-        let totalGuardado = 0;        // Plata de lo viejo
+        const autoCobrar = urlParams.get('cobrar') === '1';
+        const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('tituloMesa').innerText = `Mesa / Cuenta #${idCuenta || 'Desconocida'}`;
+        let carritoMesa = [];          // Lo NUEVO que agregas ahorita (todavía no guardado)
+        let detallesGuardados = [];    // Lo que ya está guardado en la base de datos
+        let resultadosBusqueda = [];   // Últimos productos encontrados en el buscador
+        let totalNuevo = 0;
+        let totalGuardado = 0;
+        let totalACobrar = 0;
+        let procesando = false;        // Evita dobles clics
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!idCuenta) { window.location.href = 'cuentas.html'; return; }
+            document.getElementById('tituloMesa').textContent = `Mesa / Cuenta #${idCuenta}`;
+
             const buscador = document.getElementById('buscadorProductos');
-            if(buscador) buscador.addEventListener('input', buscarProductos);
-            
-            // 🚀 ESTO FALTABA: Al entrar, vamos a traer lo que ya consumieron
-            cargarHistorialMesa();
+            if (buscador) buscador.addEventListener('input', buscarProductos);
+
+            await cargarHistorialMesa();
+            if (autoCobrar) cobrarMesa();   // viene del botón "Cobrar" de la lista de mesas
         });
 
-        // 1. CARGAR LO QUE YA SE TOMARON ANTES
+        // 1. CARGAR LO QUE YA SE CONSUMIÓ
         async function cargarHistorialMesa() {
             try {
                 const res = await fetch(`/api/cuentas/${idCuenta}/detalle`);
                 const data = await res.json();
-                
-                if (data.success && data.detalles.length > 0) {
-                    detallesGuardados = data.detalles; // Guardamos el historial
+                if (!data.success) {
+                    alert('Error: ' + (data.message || 'No se pudo cargar la cuenta.'));
+                    window.location.href = 'cuentas.html';
+                    return;
                 }
-                renderizarMesa(); // Dibujamos la pantalla
+                if (data.cuenta) {
+                    const icono = data.cuenta.tipo === 'mesa' ? '🪑' : '👤';
+                    document.getElementById('tituloMesa').textContent = `${icono} ${data.cuenta.identificador}`;
+                    if (data.cuenta.estado !== 'Abierta') {
+                        alert(`Esta cuenta ya está "${data.cuenta.estado}".`);
+                        window.location.href = 'cuentas.html';
+                        return;
+                    }
+                }
+                detallesGuardados = data.detalles || [];
+                renderizarMesa();
             } catch (error) {
-                console.error("Error cargando historial:", error);
+                console.error('Error cargando historial:', error);
+                alert('No se pudo cargar la cuenta. Revisa la conexión con el servidor.');
             }
         }
 
@@ -167,47 +188,49 @@
         async function buscarProductos(e) {
             const q = e.target.value.trim();
             const cajaResultados = document.getElementById('resultadosBusqueda');
-            
+
             if (q.length < 2) {
                 cajaResultados.innerHTML = '<div class="text-muted text-center py-4">Usa el buscador para agregar tragos.</div>';
                 return;
             }
             try {
-                const res = await fetch(`/api/productos/buscar?q=${q}`);
+                const res = await fetch(`/api/productos/buscar?q=${encodeURIComponent(q)}`);
                 const data = await res.json();
-                cajaResultados.innerHTML = '';
+                if (e.target.value.trim() !== q) return;   // llegó tarde: ya escribieron otra cosa
 
                 if (data.success && data.productos.length > 0) {
-                    data.productos.forEach(prod => {
-                        cajaResultados.innerHTML += `
-                            <button class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" 
-                                onmousedown="event.preventDefault(); agregarATabla('${prod.nombre}', ${prod.precio_venta_unitario}, ${prod.id_producto}, ${prod.stock_unidades})">
-                                <div>
-                                    <strong class="text-teal">${prod.nombre}</strong><br>
-                                    <small class="text-muted">Stock: ${prod.stock_unidades}</small>
-                                </div>
-                                <span class="badge bg-success rounded-pill fs-6 shadow-sm">S/ ${parseFloat(prod.precio_venta_unitario).toFixed(2)}</span>
-                            </button>
-                        `;
-                    });
+                    resultadosBusqueda = data.productos;
+                    cajaResultados.innerHTML = data.productos.map((prod, i) => `
+                        <button class="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+                            onmousedown="event.preventDefault(); agregarDesdeBusqueda(${i})">
+                            <div>
+                                <strong class="text-teal">${esc(prod.nombre)}</strong><br>
+                                <small class="text-muted">Stock: ${prod.stock_unidades}</small>
+                            </div>
+                            <span class="badge bg-success rounded-pill fs-6 shadow-sm">S/ ${parseFloat(prod.precio_venta_unitario).toFixed(2)}</span>
+                        </button>
+                    `).join('');
                 } else {
                     cajaResultados.innerHTML = '<div class="text-muted text-center py-4">No hay productos con ese nombre.</div>';
                 }
-            } catch (error) { console.error("Error buscando:", error); }
+            } catch (error) { console.error('Error buscando:', error); }
+        }
+
+        function agregarDesdeBusqueda(i) {
+            const p = resultadosBusqueda[i];
+            if (p) agregarATabla(p.nombre, p.precio_venta_unitario, p.id_producto, p.stock_unidades);
         }
 
         // 3. AGREGAR TRAGO NUEVO A LA MESA
         function agregarATabla(nombre, precio, id_producto, stock) {
-            let itemExistente = carritoMesa.find(item => item.id_producto === id_producto);
-
+            const itemExistente = carritoMesa.find(item => item.id_producto === id_producto);
             if (itemExistente) {
-                if (itemExistente.cantidad >= stock) return alert("¡Ya no hay más stock en almacén!");
+                if (itemExistente.cantidad >= stock) return alert('¡Ya no hay más stock en almacén!');
                 itemExistente.cantidad++;
             } else {
-                if (stock <= 0) return alert("¡Sin stock disponible!");
+                if (stock <= 0) return alert('¡Sin stock disponible!');
                 carritoMesa.push({ id_producto, nombre, precio: parseFloat(precio), cantidad: 1, stock });
             }
-
             const buscador = document.getElementById('buscadorProductos');
             buscador.value = '';
             buscador.focus();
@@ -216,10 +239,10 @@
         }
 
         function modificarCantidad(id_producto, accion) {
-            let item = carritoMesa.find(i => i.id_producto === id_producto);
+            const item = carritoMesa.find(i => i.id_producto === id_producto);
             if (!item) return;
             if (accion === 'sumar') {
-                if (item.cantidad >= item.stock) return alert("Stock máximo alcanzado.");
+                if (item.cantidad >= item.stock) return alert('Stock máximo alcanzado.');
                 item.cantidad++;
             } else if (accion === 'restar') {
                 item.cantidad--;
@@ -227,40 +250,39 @@
             }
             renderizarMesa();
         }
-// 4. DIBUJAR LA LISTA (LOS VIEJOS Y LOS NUEVOS) - CORREGIDO
+
+        // 4. DIBUJAR LA LISTA (LO GUARDADO Y LO NUEVO)
         function renderizarMesa() {
             const lista = document.getElementById('listaConsumo');
             lista.innerHTML = '';
             totalNuevo = 0;
             totalGuardado = 0;
 
-            // A) Dibujamos los tragos guardados en la BD 
-            detallesGuardados.forEach(item => {
-                // 🚀 AQUÍ ESTABA EL ERROR: Obligamos a que el subtotal de MySQL sea número
-                let subtotalBD = parseFloat(item.subtotal) || 0; 
+            // A) Lo ya guardado (se puede quitar con motivo si el mozo se equivocó)
+            detallesGuardados.forEach((item, idx) => {
+                const subtotalBD = parseFloat(item.subtotal) || 0;
                 totalGuardado += subtotalBD;
-                
                 lista.innerHTML += `
                     <li class="list-group-item d-flex justify-content-between align-items-center bg-light text-muted border-0 border-bottom p-3">
-                        <div style="width: 50%;">
-                            <div>✅ ${item.nombre}</div>
+                        <div style="width: 45%;">
+                            <div>✅ ${esc(item.nombre)}</div>
                             <small>Ya despachado</small>
                         </div>
-                        <div class="fw-bold px-3">Cant: ${item.cantidad}</div>
-                        <div class="fw-bold text-end" style="width: 25%;">S/ ${subtotalBD.toFixed(2)}</div>
+                        <div class="fw-bold px-2">Cant: ${item.cantidad}</div>
+                        <div class="fw-bold text-end" style="width: 22%;">S/ ${subtotalBD.toFixed(2)}</div>
+                        <button type="button" class="btn btn-sm btn-outline-danger ms-2" title="Quitar (error del mozo)" onclick="quitarGuardado(${idx})">✖</button>
                     </li>
                 `;
             });
 
-            // B) Dibujamos los tragos nuevos que agregas ahorita
+            // B) Lo nuevo que agregas ahorita
             carritoMesa.forEach(item => {
-                let subtotal = item.precio * item.cantidad;
+                const subtotal = item.precio * item.cantidad;
                 totalNuevo += subtotal;
-                
                 lista.innerHTML += `
                     <li class="list-group-item d-flex justify-content-between align-items-center border-0 border-bottom p-3 border-start border-4 border-success">
                         <div style="width: 50%;">
-                            <div class="fw-bold text-success">🆕 ${item.nombre}</div>
+                            <div class="fw-bold text-success">🆕 ${esc(item.nombre)}</div>
                             <small class="text-muted">S/ ${item.precio.toFixed(2)} c/u</small>
                         </div>
                         <div class="btn-group btn-group-sm" role="group">
@@ -273,129 +295,132 @@
                 `;
             });
 
-            // Si no hay nada, mostramos el mensaje
             if (detallesGuardados.length === 0 && carritoMesa.length === 0) {
                 lista.innerHTML = '<li class="list-group-item text-center text-muted py-3">La mesa está vacía.</li>';
             }
-
-            // Sumamos la plata vieja con la nueva
-            const granTotal = totalGuardado + totalNuevo;
-            document.getElementById('montoTotal').innerText = `S/ ${granTotal.toFixed(2)}`;
+            document.getElementById('montoTotal').innerText = `S/ ${(totalGuardado + totalNuevo).toFixed(2)}`;
         }
 
         // 5. GUARDAR SOLO LO NUEVO Y REGRESAR
         async function guardarMesa() {
-            if(carritoMesa.length === 0) return alert("No has agregado ningún trago nuevo para guardar.");
-
+            if (carritoMesa.length === 0) return alert('No has agregado ningún trago nuevo para guardar.');
+            if (procesando) return;
+            procesando = true;
             try {
-                
                 const response = await fetch('/api/cuentas/guardar', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: JSON_HEADERS,
                     body: JSON.stringify({
                         id_cuenta: idCuenta,
-                        total_cuenta: totalNuevo,
-                        productos: carritoMesa   
+                        productos: carritoMesa.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
                     })
                 });
-
                 const data = await response.json();
                 if (data.success) {
                     window.location.href = 'cuentas.html';
                 } else {
-                    alert("Error al guardar: " + data.message);
+                    alert('Error al guardar: ' + data.message);
                 }
             } catch (error) {
-                console.error("Error guardando mesa:", error);
-                alert("Error de conexión con el servidor.");
+                console.error('Error guardando mesa:', error);
+                alert('Error de conexión con el servidor.');
+            } finally {
+                procesando = false;
             }
         }
-let totalACobrar = 0; 
-       // 1. ABRIR EL MODAL AL DAR CLIC EN COBRAR
-        function cobrarMesa() {
-            
-            if(carritoMesa.length > 0) {
-                return alert("Tienes tragos nuevos marcados en verde. Dale a 'Guardar y seguir tomando' primero para registrarlos antes de cobrar.");
+
+        // 6. QUITAR UN PRODUCTO YA GUARDADO (error del mozo): devuelve el stock y queda registrado
+        async function quitarGuardado(idx) {
+            const item = detallesGuardados[idx];
+            if (!item || procesando) return;
+
+            let cantidad = item.cantidad;
+            if (item.cantidad > 1) {
+                const r = prompt(`¿Cuántas unidades de "${item.nombre}" quieres quitar? (1 a ${item.cantidad})`, '1');
+                if (r === null) return;
+                cantidad = parseInt(r, 10);
+                if (!(cantidad >= 1 && cantidad <= item.cantidad)) return alert('Cantidad no válida.');
             }
-            if(detallesGuardados.length === 0) return alert("No hay nada que cobrar en esta mesa.");
+            const motivo = prompt(`Escribe el MOTIVO de quitar ${cantidad} x ${item.nombre} (queda registrado):`);
+            if (motivo === null) return;
+            if (motivo.trim().length < 3) return alert('⚠️ Debes escribir un motivo (mínimo 3 letras).');
 
-            
-            totalACobrar = totalGuardado; 
-            document.getElementById('modalMontoTotal').innerText = `S/ ${totalACobrar.toFixed(2)}`;
-
-            
-            const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
-            modal.show();
-        }
-
-     // Enviar los montos desglosados al backend de forma segura
-        async function confirmarCobroEnBD() {
-            const metodoPago = document.getElementById('metodoPago').value;
-            const idCajaActiva = localStorage.getItem('id_caja_activa');
-
-            if (!idCajaActiva) return alert("Error: No tienes un turno de caja abierto.");
-
-            let pagoEfectivo = 0, pagoYape = 0, pagoPlin = 0, pagoTarjeta = 0;
-
-            if (metodoPago === 'Mixto') {
-                pagoEfectivo = parseFloat(document.getElementById('montoEfectivo').value) || 0;
-                pagoYape = parseFloat(document.getElementById('montoYape').value) || 0;
-                pagoPlin = parseFloat(document.getElementById('montoPlin').value) || 0;
-                pagoTarjeta = parseFloat(document.getElementById('montoTarjeta').value) || 0;
-
-                const sumaParcial = pagoEfectivo + pagoYape + pagoPlin + pagoTarjeta;
-                
-                // Validamos que cuadre exactamente con el total a cobrar
-                if (Math.abs(sumaParcial - totalACobrar) > 0.05) {
-                    return alert(`La suma del desglose (S/ ${sumaParcial.toFixed(2)}) no coincide con el total a cobrar de la mesa (S/ ${totalACobrar.toFixed(2)}).`);
-                }
-            } else {
-                // Si es pago simple, mandamos todo el total a su respectiva variable
-                if (metodoPago === 'Efectivo') pagoEfectivo = totalACobrar;
-                else if (metodoPago === 'Yape') pagoYape = totalACobrar;
-                else if (metodoPago === 'Plin') pagoPlin = totalACobrar;
-                else if (metodoPago === 'Tarjeta') pagoTarjeta = totalACobrar;
-            }
-
+            procesando = true;
             try {
-                const response = await fetch('/api/cuentas/cobrar', {
+                const res = await fetch('/api/cuentas/quitar-item', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id_cuenta: idCuenta,
-                        id_caja: idCajaActiva,
-                        monto: totalACobrar,
-                        pago_efectivo: pagoEfectivo,
-                        pago_yape: pagoYape,
-                        pago_plin: pagoPlin,
-                        pago_tarjeta: pagoTarjeta,
-                        id_usuario: localStorage.getItem('id_usuario') || 1
-                    })
+                    headers: JSON_HEADERS,
+                    body: JSON.stringify({ id_detalle: item.id_detalle, cantidad, motivo: motivo.trim() })
                 });
-
-                const data = await response.json();
+                const data = await res.json();
                 if (data.success) {
-                    alert("¡Cobro exitoso y registrado en ventas!");
-                    window.location.href = 'cuentas.html';
+                    await cargarHistorialMesa();
                 } else {
-                    alert("Error: " + data.message);
+                    alert('Error: ' + data.message);
+                    await cargarHistorialMesa();
                 }
             } catch (error) {
-                console.error("Error al cobrar:", error);
-                alert("Error de conexión con el servidor.");
+                console.error('Error al quitar:', error);
+                alert('Error de conexión con el servidor.');
+            } finally {
+                procesando = false;
             }
         }
 
+        // 7. ANULAR TODA LA CUENTA
+        async function anularCuenta() {
+            if (procesando) return;
+            let motivo = '';
+            if (detallesGuardados.length > 0) {
+                const dato = prompt(`Vas a ANULAR esta cuenta (S/ ${totalGuardado.toFixed(2)}).\nEl stock vuelve al inventario.\n\nEscribe el MOTIVO (queda registrado):`);
+                if (dato === null) return;
+                motivo = dato.trim();
+                if (motivo.length < 3) return alert('⚠️ Debes escribir un motivo (mínimo 3 letras).');
+            } else if (!confirm('¿Cancelar esta cuenta vacía?')) {
+                return;
+            }
+            procesando = true;
+            try {
+                const res = await fetch('/api/cuentas/anular', {
+                    method: 'POST',
+                    headers: JSON_HEADERS,
+                    body: JSON.stringify({ id_cuenta: idCuenta, motivo })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert(data.message);
+                    window.location.href = 'cuentas.html';
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (error) {
+                console.error('Error al anular:', error);
+                alert('Error de conexión con el servidor.');
+            } finally {
+                procesando = false;
+            }
+        }
+
+        // 8. COBRAR: abrir la ventana de pago
+        function cobrarMesa() {
+            if (carritoMesa.length > 0) {
+                return alert("Tienes tragos nuevos marcados en verde. Dale a 'Guardar y seguir tomando' primero.");
+            }
+            if (detallesGuardados.length === 0) return alert('No hay nada que cobrar en esta mesa.');
+            totalACobrar = totalGuardado;
+            document.getElementById('modalMontoTotal').innerText = `S/ ${totalACobrar.toFixed(2)}`;
+            document.getElementById('metodoPago').value = 'Efectivo';
+            document.getElementById('seccionMixto').style.display = 'none';
+            new bootstrap.Modal(document.getElementById('modalCobro')).show();
+        }
 
         // Mostrar u ocultar las cajas de texto si eligen Pago Mixto
         function verificarMetodoPago() {
             const metodo = document.getElementById('metodoPago').value;
             const seccionMixto = document.getElementById('seccionMixto');
-
             if (metodo === 'Mixto') {
                 seccionMixto.style.display = 'block';
-                // Inicializamos poniendo todo el total en efectivo por comodidad
-                document.getElementById('montoEfectivo').value = totalACobrar.toFixed(2);
+                document.getElementById('montoEfectivo').value = totalACobrar.toFixed(2);   // todo en efectivo por comodidad
                 document.getElementById('montoYape').value = '0.00';
                 document.getElementById('montoPlin').value = '0.00';
                 document.getElementById('montoTarjeta').value = '0.00';
@@ -404,40 +429,20 @@ let totalACobrar = 0;
             }
         }
 
-        // Modifica tu función cobrarMesa para que resetee el selector al abrir
-        function cobrarMesa() {
-            if(carritoMesa.length > 0) {
-                return alert("Tienes tragos nuevos marcados en verde. Dale a 'Guardar y seguir tomando' primero.");
-            }
-            if(detallesGuardados.length === 0) return alert("No hay nada que cobrar en esta mesa.");
-
-            totalACobrar = totalGuardado; 
-            document.getElementById('modalMontoTotal').innerText = `S/ ${totalACobrar.toFixed(2)}`;
-            document.getElementById('metodoPago').value = 'Efectivo';
-            document.getElementById('seccionMixto').style.display = 'none';
-
-            const modal = new bootstrap.Modal(document.getElementById('modalCobro'));
-            modal.show();
-        }
-
-        // Enviar los montos desglosados al backend
+        // 9. CONFIRMAR EL COBRO (el servidor vuelve a calcular el total y valida los pagos)
         async function confirmarCobroEnBD() {
+            if (procesando) return;
             const metodoPago = document.getElementById('metodoPago').value;
             const idCajaActiva = localStorage.getItem('id_caja_activa');
-
-            if (!idCajaActiva) return alert("Error: No tienes un turno de caja abierto.");
+            if (!idCajaActiva) return alert('Error: No tienes un turno de caja abierto. Abre la caja primero.');
 
             let pagoEfectivo = 0, pagoYape = 0, pagoPlin = 0, pagoTarjeta = 0;
-
             if (metodoPago === 'Mixto') {
                 pagoEfectivo = parseFloat(document.getElementById('montoEfectivo').value) || 0;
                 pagoYape = parseFloat(document.getElementById('montoYape').value) || 0;
                 pagoPlin = parseFloat(document.getElementById('montoPlin').value) || 0;
                 pagoTarjeta = parseFloat(document.getElementById('montoTarjeta').value) || 0;
-
                 const sumaParcial = pagoEfectivo + pagoYape + pagoPlin + pagoTarjeta;
-                
-                // Validamos que cuadre con el total (con margen mínimo por decimales)
                 if (Math.abs(sumaParcial - totalACobrar) > 0.05) {
                     return alert(`La suma del desglose (S/ ${sumaParcial.toFixed(2)}) no coincide con el total a cobrar (S/ ${totalACobrar.toFixed(2)}).`);
                 }
@@ -448,10 +453,11 @@ let totalACobrar = 0;
                 else if (metodoPago === 'Tarjeta') pagoTarjeta = totalACobrar;
             }
 
+            procesando = true;
             try {
                 const response = await fetch('/api/cuentas/cobrar', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: JSON_HEADERS,
                     body: JSON.stringify({
                         id_cuenta: idCuenta,
                         id_caja: idCajaActiva,
@@ -459,21 +465,21 @@ let totalACobrar = 0;
                         pago_efectivo: pagoEfectivo,
                         pago_yape: pagoYape,
                         pago_plin: pagoPlin,
-                        pago_tarjeta: pagoTarjeta,
-                        id_usuario: localStorage.getItem('id_usuario') || 1
+                        pago_tarjeta: pagoTarjeta
                     })
                 });
-
                 const data = await response.json();
                 if (data.success) {
-                    alert("¡Cobro exitoso y registrado en ventas!");
+                    alert('¡Cobro exitoso y registrado en ventas!');
                     window.location.href = 'cuentas.html';
                 } else {
-                    alert("Error: " + data.message);
+                    alert('Error: ' + data.message);
                 }
             } catch (error) {
-                console.error("Error al cobrar:", error);
-                alert("Error de conexión con el servidor.");
+                console.error('Error al cobrar:', error);
+                alert('Error de conexión con el servidor.');
+            } finally {
+                procesando = false;
             }
         }
     </script>

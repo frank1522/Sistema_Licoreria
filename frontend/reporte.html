@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+    <script src="auth.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ERP Licorería - Reportes Avanzados</title>
@@ -147,7 +148,7 @@
                             <tr>
                                 <td class="fw-bold text-muted">#${v.id_venta}</td>
                                 <td class="small">${fechaFormateada}</td>
-                                <td class="fw-medium">${v.cliente_mesa || 'Público General'}</td>
+                                <td class="fw-medium">${esc(v.cliente_mesa || 'Público General')}</td>
                                 <td>S/ ${Number(v.pago_efectivo || 0).toFixed(2)}</td>
                                 <td>S/ ${totalDigital.toFixed(2)}</td>
                                 <td class="text-center fw-bold text-success">S/ ${totalVenta.toFixed(2)}</td>
